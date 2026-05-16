@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="CircleShape2D" id="1"]
+radius = 8.0
+
+[node name="DummyTarget" type="Area2D"]
+
+[node name="Shape" parent="." type="CollisionShape2D"]
+shape = SubResource("1")
+
+[node name="Visual" parent="." type="Polygon2D"]
+color = Color(0.533, 0.596, 0.659, 1)
+polygon = PackedVector2Array(8, 0, 6, 6, 0, 8, -6, 6, -8, 0, -6, -6, 0, -8, 6, -6)
