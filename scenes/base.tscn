@@ -1,0 +1,85 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/base.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/floor_grid.gd" id="2"]
+
+[node name="Base" type="Node2D"]
+script = ExtResource("1")
+
+[node name="FloorGrid" parent="." type="Node2D"]
+script = ExtResource("2")
+
+[node name="Anthe" parent="." type="Node2D"]
+position = Vector2(240, 130)
+
+[node name="Visual" parent="Anthe" type="Polygon2D"]
+color = Color(0.482, 0.306, 0.627, 1)
+polygon = PackedVector2Array(0, -8, 5, -4, 4, 6, -4, 6, -5, -4)
+
+[node name="HUD" parent="." type="CanvasLayer"]
+
+[node name="RunLabel" parent="HUD" type="Label"]
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 100.0
+offset_bottom = 13.0
+theme_override_font_sizes/font_size = 8
+text = "RUN 0"
+
+[node name="GriefLabel" parent="HUD" type="Label"]
+offset_left = 4.0
+offset_top = 15.0
+offset_right = 36.0
+offset_bottom = 23.0
+theme_override_font_sizes/font_size = 6
+text = "GRIEF"
+
+[node name="GriefBar" parent="HUD" type="HBoxContainer"]
+offset_left = 40.0
+offset_top = 15.0
+offset_right = 130.0
+offset_bottom = 23.0
+theme_override_constants/separation = 2
+
+[node name="SummonLabel" parent="HUD" type="Label"]
+offset_left = 4.0
+offset_top = 25.0
+offset_right = 160.0
+offset_bottom = 34.0
+theme_override_font_sizes/font_size = 6
+text = "NORMAL SUMMONING"
+
+[node name="AntheLabel" parent="HUD" type="Label"]
+offset_left = 222.0
+offset_top = 112.0
+offset_right = 260.0
+offset_bottom = 121.0
+theme_override_font_sizes/font_size = 6
+text = "ANTHE"
+horizontal_alignment = 1
+
+[node name="ClockLabel" parent="HUD" type="Label"]
+offset_left = 4.0
+offset_top = 36.0
+offset_right = 240.0
+offset_bottom = 44.0
+theme_override_font_sizes/font_size = 6
+text = "ANTHE  ○○○○○○○○○○"
+
+[node name="WaitPrompt" parent="HUD" type="Label"]
+offset_left = 140.0
+offset_top = 243.0
+offset_right = 340.0
+offset_bottom = 252.0
+theme_override_font_sizes/font_size = 8
+text = "[TAB] Wait"
+horizontal_alignment = 1
+
+[node name="Prompt" parent="HUD" type="Label"]
+offset_left = 140.0
+offset_top = 254.0
+offset_right = 340.0
+offset_bottom = 265.0
+theme_override_font_sizes/font_size = 8
+text = "[E] Venture Out"
+horizontal_alignment = 1

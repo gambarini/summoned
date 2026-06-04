@@ -1,10 +1,21 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/warrior.tscn" id="1"]
 [ext_resource type="Script" path="res://scripts/main.gd" id="2"]
 [ext_resource type="Script" path="res://scripts/floor_grid.gd" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/hud.tscn" id="4"]
-[ext_resource type="PackedScene" path="res://scenes/dummy_target.tscn" id="5"]
+
+[sub_resource type="RectangleShape2D" id="1"]
+size = Vector2(8.0, 290.0)
+
+[sub_resource type="RectangleShape2D" id="2"]
+size = Vector2(8.0, 290.0)
+
+[sub_resource type="RectangleShape2D" id="3"]
+size = Vector2(496.0, 8.0)
+
+[sub_resource type="RectangleShape2D" id="4"]
+size = Vector2(496.0, 8.0)
 
 [node name="Main" type="Node2D"]
 script = ExtResource("2")
@@ -15,7 +26,22 @@ script = ExtResource("3")
 [node name="Warrior" parent="." instance=ExtResource("1")]
 position = Vector2(240, 135)
 
-[node name="DummyTarget" parent="." instance=ExtResource("5")]
-position = Vector2(360, 135)
-
 [node name="HUD" parent="." instance=ExtResource("4")]
+
+[node name="Walls" parent="." type="StaticBody2D"]
+
+[node name="Left" parent="Walls" type="CollisionShape2D"]
+position = Vector2(-4.0, 135.0)
+shape = SubResource("1")
+
+[node name="Right" parent="Walls" type="CollisionShape2D"]
+position = Vector2(484.0, 135.0)
+shape = SubResource("2")
+
+[node name="Top" parent="Walls" type="CollisionShape2D"]
+position = Vector2(240.0, -4.0)
+shape = SubResource("3")
+
+[node name="Bottom" parent="Walls" type="CollisionShape2D"]
+position = Vector2(240.0, 274.0)
+shape = SubResource("4")
