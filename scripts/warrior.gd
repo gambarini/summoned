@@ -450,10 +450,22 @@ func _setup_notation_drift() -> void:
 	pm.gravity = Vector3(0.0, -8.0, 0.0)                # gentle upward drift
 	pm.initial_velocity_min = 3.0
 	pm.initial_velocity_max = 9.0
-	pm.scale_min = 0.34
-	pm.scale_max = 0.5
+	pm.damping_min = 2.0
+	pm.damping_max = 6.0                                # notes decelerate and hang
+	pm.scale_min = 0.18
+	pm.scale_max = 0.32                                 # smaller score debris
+	pm.scale_curve = _build_notation_scale_curve()     # shrink as they dissolve
 	pm.angle_min = -25.0
-	pm.angle_max = 25.0                                 # slight tumble per glyph
+	pm.angle_max = 25.0                                 # initial tumble per glyph
+	pm.angular_velocity_min = -90.0
+	pm.angular_velocity_max = 90.0                      # slow continuous spin
+	pm.tangential_accel_min = -6.0
+	pm.tangential_accel_max = 6.0                       # gentle curl around the form
+	pm.turbulence_enabled = true
+	pm.turbulence_noise_strength = 4.0                  # waft on invisible currents
+	pm.turbulence_noise_scale = 1.6
+	pm.turbulence_influence_min = 0.1
+	pm.turbulence_influence_max = 0.4
 	pm.anim_offset_min = 0.0
 	pm.anim_offset_max = 1.0                            # random frame across the strip
 	pm.color_ramp = _build_notation_ramp()
@@ -472,6 +484,16 @@ func _build_notation_ramp() -> GradientTexture1D:
 	])
 	var tex := GradientTexture1D.new()
 	tex.gradient = grad
+	return tex
+
+func _build_notation_scale_curve() -> CurveTexture:
+	# Scale over lifetime: pop to full size, then taper to nothing as it dissolves.
+	var curve := Curve.new()
+	curve.add_point(Vector2(0.0, 0.7))
+	curve.add_point(Vector2(0.2, 1.0))
+	curve.add_point(Vector2(1.0, 0.2))
+	var tex := CurveTexture.new()
+	tex.curve = curve
 	return tex
 
 func _notation_tier_scale() -> float:
