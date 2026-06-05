@@ -3,11 +3,54 @@ extends CharacterBody2D
 const SPEED := 100.0
 const ACCEL := 10.0   # lerp factor toward target speed — higher = snappier start
 const DECEL := 14.0   # lerp factor toward zero — slightly faster stop than start
+
+# Vertical hover bob + horizontal sway — driven here in GDScript (not the shader)
+# so the Hollow nodes ride the same offset and stay welded to the chest. Phase is
+# integrated incrementally (_bob_phase += speed * delta) so speed can change with
+# movement without the sprite racing through cycles — multiplying an accumulated
+# TIME by a changing frequency is what caused the start/stop "jump". Bob only runs
+# in IDLE/MOVE, matching the old shader (which only displaced Sprite8Dir).
+const HOVER_SPEED := 0.8        # base bob cycle speed (rad/s)
+const HOVER_PIXELS := 1.5       # base vertical amplitude (px) at idle
+const HOVER_MOVE_SPEED := 0.45  # speed scale added at full move
+const HOVER_MOVE_BOB := 0.6     # amplitude scale added at full move
+const HOVER_SWAY := 1.2         # horizontal pendulum amplitude (px) at full move
+const _BOB_BASE_BODY := Vector2(0, 0)
+const _BOB_BASE_HOLLOW := Vector2(0, 4)
+var _bob_phase := 0.0
 const MAX_COHERENCE := 10
 const RESONANCE_RADIUS := 120.0
 const BURST_RADIUS := 80.0
 const AttackArcScene := preload("res://scenes/attack_arc.tscn")
 const EnemyScript = preload("res://scripts/enemy.gd")
+const _NOTATION_SHEET := preload("res://assets/sprites/notation_glyphs.png")
+
+# Notation drift — emission ratio at rest vs. moving, and per-coherence-tier
+# density multiplier (high · medium · low · critical). See _setup_notation_drift.
+const NOTATION_IDLE_RATIO := 0.4
+const NOTATION_MOVE_RATIO := 0.8
+const _NOTATION_TIER_SCALE := [0.8, 1.0, 1.25, 1.55]
+
+# The Hollow — per hollow_stress (0–3), mirrors HOLLOW_STRESS_PARAMS in WARRIOR.md.
+# Rendered as two stacked sprites so it reads as a *hole*, not a lamp: a dark void
+# disc (normal blend, carves a recess into the body) with a smaller burning ember
+# core (additive) sunk inside it. The dark gap between them sells the depth.
+# Brightness = ember alpha (dims as the wound opens); radius = scale of both discs;
+# inward = HollowPull emission ratio (more notation devoured under stress).
+const _HOLLOW_VOID_SCALE := 0.72   # dark recess — kept wider than the ember
+const _HOLLOW_GLOW_SCALE := 0.34   # burning core — tight point sunk inside the void
+const _HOLLOW_BRIGHTNESS := [1.0, 0.85, 0.65, 0.4]
+const _HOLLOW_RADIUS := [1.0, 1.2, 1.5, 1.9]
+const _HOLLOW_INWARD := [0.0, 0.25, 0.6, 0.9]
+
+# The Hollow is a front-of-chest wound — it must not render on the warrior's back.
+# Visibility factor per facing (multiplies ember + void alpha). Mirrors the
+# "Hollow Visibility Per Direction" table in WARRIOR.md. Applied in IDLE/MOVE only.
+const _HOLLOW_DIR_VIS := {
+	"s": 1.0, "se": 0.6, "sw": 0.6,
+	"e": 0.3, "w": 0.3,
+	"ne": 0.0, "n": 0.0, "nw": 0.0,
+}
 
 signal coherence_changed(value: int)
 signal chain_changed(value: int)
@@ -23,12 +66,16 @@ enum State {
 }
 
 # Overlay modifiers — do not gate states, read by visual/audio systems
-@export var hollow_stress: int = 0        # 0–3
+@export var hollow_stress: int = 0: set = _set_hollow_stress  # 0–3
 @export var tribe_coherence_tier: int = 0 # 0=high 1=medium 2=low 3=critical
 
 @onready var _sprite: AnimatedSprite2D = $Sprite
 @onready var _sprite_8dir: Sprite2D = $Sprite8Dir
 @onready var _shader_mat: ShaderMaterial = $Sprite8Dir.material as ShaderMaterial
+@onready var _notation: GPUParticles2D = $NotationDrift
+@onready var _hollow_glow: Sprite2D = $HollowGlow
+@onready var _hollow_void: Sprite2D = $HollowVoid
+@onready var _hollow_pull: GPUParticles2D = $HollowPull
 
 var coherence: int
 var chain := 0
@@ -122,6 +169,9 @@ func _ready() -> void:
 	coherence = GameState.starting_coherence()
 	_setup_sprite_frames()
 	_load_8dir_textures()
+	_setup_notation_drift()
+	_setup_hollow()
+	_apply_hollow_stress()
 	$StartupTimer.timeout.connect(func(): _change_state(State.ATTACK_ACTIVE))
 	$ActiveTimer.timeout.connect(func(): _change_state(State.ATTACK_RECOVERY))
 	$RecoveryTimer.timeout.connect(_on_recovery_expired)
@@ -137,6 +187,8 @@ func _physics_process(delta: float) -> void:
 	# Keep 8dir texture in sync with facing during idle/move
 	if _use_8dir and _state in [State.IDLE, State.MOVE]:
 		_refresh_8dir()
+	_update_hover(delta)
+	_refresh_hollow_facing()
 
 func _unhandled_input(event: InputEvent) -> void:
 	match _state:
@@ -327,6 +379,7 @@ func _play_dir(base: String) -> void:
 	_sprite.play(base + "_" + data[0])
 
 func _tween_move_intensity(target: float, duration: float) -> void:
+	_tween_notation_intensity(target, duration)
 	if _shader_mat == null:
 		return
 	var current := _shader_mat.get_shader_parameter("move_intensity") as float
@@ -347,6 +400,245 @@ func _stop_idle_pulse() -> void:
 	if _idle_pulse:
 		_idle_pulse.kill()
 		_idle_pulse = null
+
+# Hover bob + sway. Reads the already-tweened move_intensity so the ramp is shared
+# with the shader's hem/shimmer. Phase is integrated, never (accumulated time ×
+# changing speed), so a speed change only bends the curve forward — no jump. The
+# offset is applied to the body sprites AND the Hollow nodes so the wound rides the
+# chest; it zeroes outside IDLE/MOVE so attacks/hurt/death sit still as before.
+func _update_hover(delta: float) -> void:
+	var mi := 0.0
+	if _shader_mat:
+		mi = _shader_mat.get_shader_parameter("move_intensity") as float
+	_bob_phase += HOVER_SPEED * (1.0 + mi * HOVER_MOVE_SPEED) * delta
+	var off := Vector2.ZERO
+	if _state in [State.IDLE, State.MOVE]:
+		off.y = sin(_bob_phase) * (HOVER_PIXELS * (1.0 + mi * HOVER_MOVE_BOB))
+		off.x = sin(_bob_phase * 0.65 + 1.0) * (mi * HOVER_SWAY)
+	_sprite_8dir.position = _BOB_BASE_BODY + off
+	_sprite.position = _BOB_BASE_BODY + off
+	_hollow_void.position = _BOB_BASE_HOLLOW + off
+	_hollow_glow.position = _BOB_BASE_HOLLOW + off
+	_hollow_pull.position = _BOB_BASE_HOLLOW + off
+
+# ── Notation drift particles ──────────────────────────────────────────────────
+# "His cloak has no clean edge; it dissolves into drifting notation particles at
+# its boundary." (GDD §18). One world-space emitter sheds random glyphs from the
+# 4-frame notation sheet. World space = particles stay put as the warrior moves,
+# so the movement "trail" of score debris falls out of the same node for free.
+
+func _setup_notation_drift() -> void:
+	if _notation == null:
+		return
+	_notation.texture = _NOTATION_SHEET
+	_notation.amount = 24
+	_notation.lifetime = 1.4
+	_notation.explosiveness = 0.0
+	_notation.randomness = 0.5
+	_notation.local_coords = false   # world space → movement leaves a debris trail
+	_notation.preprocess = 1.4       # field is already populated when the warrior appears
+	_notation.amount_ratio = minf(NOTATION_IDLE_RATIO * _notation_tier_scale(), 1.0)
+
+	# Each particle locks onto a random static glyph from the 4-frame strip.
+	_notation.material = _make_glyph_material()
+
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(11.0, 11.0, 0.0)  # over the cloak silhouette
+	pm.direction = Vector3(0.0, -1.0, 0.0)              # notation rises off the form
+	pm.spread = 40.0
+	pm.gravity = Vector3(0.0, -8.0, 0.0)                # gentle upward drift
+	pm.initial_velocity_min = 3.0
+	pm.initial_velocity_max = 9.0
+	pm.scale_min = 0.34
+	pm.scale_max = 0.5
+	pm.angle_min = -25.0
+	pm.angle_max = 25.0                                 # slight tumble per glyph
+	pm.anim_offset_min = 0.0
+	pm.anim_offset_max = 1.0                            # random frame across the strip
+	pm.color_ramp = _build_notation_ramp()
+	_notation.process_material = pm
+	_notation.emitting = true
+
+func _build_notation_ramp() -> GradientTexture1D:
+	# Alpha over particle lifetime: fade in fast, hold, dissolve out.
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.25, 0.7, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1, 1, 1, 0.0),
+		Color(1, 1, 1, 0.9),
+		Color(1, 1, 1, 0.7),
+		Color(1, 1, 1, 0.0),
+	])
+	var tex := GradientTexture1D.new()
+	tex.gradient = grad
+	return tex
+
+func _notation_tier_scale() -> float:
+	return _NOTATION_TIER_SCALE[clampi(tribe_coherence_tier, 0, 3)]
+
+func _tween_notation_intensity(move_target: float, duration: float) -> void:
+	if _notation == null:
+		return
+	var ratio := lerpf(NOTATION_IDLE_RATIO, NOTATION_MOVE_RATIO, move_target) * _notation_tier_scale()
+	create_tween().tween_property(_notation, "amount_ratio", minf(ratio, 1.0), duration)
+
+# Random-static-glyph material: 4-frame strip, each particle locked to one frame.
+func _make_glyph_material() -> CanvasItemMaterial:
+	var cmat := CanvasItemMaterial.new()
+	cmat.particles_animation = true
+	cmat.particles_anim_h_frames = 4
+	cmat.particles_anim_v_frames = 1
+	cmat.particles_anim_loop = false
+	return cmat
+
+# ── The Hollow ────────────────────────────────────────────────────────────────
+# "A burning void at the warrior's chest." (GDD §18). Rendered as two stacked
+# discs so it reads as a *hole*, not a lamp: HollowVoid is a dark #0D0A1E recess
+# (normal blend — additive can't darken) and HollowGlow is a smaller ember core
+# (additive) sunk inside it; the dark gap between them sells the depth. HollowPull
+# is a local-space emitter that draws notation inward — the wound devouring score.
+# All scale with hollow_stress: the ember dims while the void widens, and the
+# inward pull strengthens, as the Hollow opens. The whole assembly sits at the
+# chest (node y = +4) and is gated by facing (_refresh_hollow_facing) so the wound
+# never renders on the warrior's back during IDLE/MOVE.
+
+func _setup_hollow() -> void:
+	if _hollow_void:
+		# Dark recess, normal blend — actually darkens the chest (additive can't).
+		_hollow_void.texture = _make_radial_void(32)
+		_hollow_void.centered = true
+	if _hollow_glow:
+		_hollow_glow.texture = _make_radial_glow(32)
+		_hollow_glow.centered = true
+		var gmat := CanvasItemMaterial.new()
+		gmat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+		_hollow_glow.material = gmat
+		# Breathing pulse on self_modulate so it multiplies the stress-set modulate.
+		var pulse := create_tween().set_loops()
+		pulse.tween_property(_hollow_glow, "self_modulate:a", 0.6, 0.9).set_ease(Tween.EASE_IN_OUT)
+		pulse.tween_property(_hollow_glow, "self_modulate:a", 1.0, 0.9).set_ease(Tween.EASE_IN_OUT)
+	if _hollow_pull:
+		_hollow_pull.texture = _NOTATION_SHEET
+		_hollow_pull.amount = 16
+		_hollow_pull.lifetime = 0.85
+		_hollow_pull.local_coords = true   # motes belong to the wound, follow the warrior
+		_hollow_pull.material = _make_glyph_material()
+		var pm := ParticleProcessMaterial.new()
+		pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+		pm.emission_ring_axis = Vector3(0.0, 0.0, 1.0)
+		pm.emission_ring_radius = 22.0
+		pm.emission_ring_inner_radius = 15.0
+		pm.emission_ring_height = 0.0
+		pm.initial_velocity_min = 0.0
+		pm.initial_velocity_max = 0.0
+		pm.radial_accel_min = -55.0
+		pm.radial_accel_max = -35.0        # negative = pulled toward the wound
+		pm.tangential_accel_min = 8.0
+		pm.tangential_accel_max = 18.0     # slight spiral inward
+		pm.scale_min = 0.28
+		pm.scale_max = 0.42
+		pm.angle_min = -180.0
+		pm.angle_max = 180.0
+		pm.anim_offset_min = 0.0
+		pm.anim_offset_max = 1.0
+		pm.color_ramp = _build_hollow_pull_ramp()
+		_hollow_pull.process_material = pm
+		_hollow_pull.emitting = true
+
+func _make_radial_glow(size: int) -> GradientTexture2D:
+	# Ember core: a small bright #F0E8D8 center, falling off through warm #D4803A
+	# to a faint cold #7B4EA0 rim. Tight falloff so the bright part stays inside
+	# the void disc, leaving a dark gap that reads as a recess. Added on top.
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.36, 0.62, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.941, 0.910, 0.847, 1.0),   # #F0E8D8 hot core
+		Color(0.941, 0.910, 0.847, 0.9),
+		Color(0.831, 0.502, 0.227, 0.45),  # #D4803A warm bleed
+		Color(0.483, 0.306, 0.627, 0.12),  # #7B4EA0 cold rim, near gone
+		Color(0.483, 0.306, 0.627, 0.0),
+	])
+	return _radial_texture(grad, size)
+
+func _make_radial_void(size: int) -> GradientTexture2D:
+	# The absence: opaque #0D0A1E core fading to transparent. Normal-blended so it
+	# deepens the body to near-black — the hole the ember burns inside of.
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.5, 0.8, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.051, 0.039, 0.118, 1.0),
+		Color(0.051, 0.039, 0.118, 0.92),
+		Color(0.051, 0.039, 0.118, 0.4),
+		Color(0.051, 0.039, 0.118, 0.0),
+	])
+	return _radial_texture(grad, size)
+
+func _radial_texture(grad: Gradient, size: int) -> GradientTexture2D:
+	var tex := GradientTexture2D.new()
+	tex.gradient = grad
+	tex.width = size
+	tex.height = size
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	return tex
+
+func _build_hollow_pull_ramp() -> GradientTexture1D:
+	# Notation (#A080E0) fades in, then shifts to the wound's heat (#F0E8D8) as
+	# it is consumed near the center.
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.85, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.627, 0.502, 0.878, 0.0),
+		Color(0.627, 0.502, 0.878, 0.85),
+		Color(0.941, 0.910, 0.847, 0.8),
+		Color(0.941, 0.910, 0.847, 0.0),
+	])
+	var tex := GradientTexture1D.new()
+	tex.gradient = grad
+	return tex
+
+func _apply_hollow_stress() -> void:
+	var s := clampi(hollow_stress, 0, 3)
+	if _hollow_glow:
+		_hollow_glow.scale = Vector2.ONE * (_HOLLOW_GLOW_SCALE * _HOLLOW_RADIUS[s])
+	if _hollow_void:
+		# The wound widens as it opens.
+		_hollow_void.scale = Vector2.ONE * (_HOLLOW_VOID_SCALE * _HOLLOW_RADIUS[s])
+	if _hollow_pull:
+		_hollow_pull.amount_ratio = _HOLLOW_INWARD[s]
+	_refresh_hollow_facing()
+
+# Gate the Hollow by facing so the wound never appears on the warrior's back.
+# Every directional state — IDLE/MOVE and the attack/echo states, all of which
+# pose toward _facing_dir — obeys the gate, so the Hollow stays dark when the back
+# is turned even mid-attack. HURT/DYING/SUMMONING use single-direction (front)
+# sheets, so they keep the wound at full.
+func _refresh_hollow_facing() -> void:
+	var s := clampi(hollow_stress, 0, 3)
+	var f := 1.0
+	var directional := _state in [
+		State.IDLE, State.MOVE,
+		State.ATTACK_STARTUP, State.ATTACK_ACTIVE, State.ATTACK_RECOVERY,
+		State.ECHO_ACTIVE,
+	]
+	if directional:
+		f = _HOLLOW_DIR_VIS.get(_facing_dir, 1.0)
+	var shown := f > 0.0
+	if _hollow_glow:
+		_hollow_glow.visible = shown
+		_hollow_glow.modulate.a = _HOLLOW_BRIGHTNESS[s] * f
+	if _hollow_void:
+		_hollow_void.visible = shown
+		_hollow_void.modulate.a = f
+	if _hollow_pull:
+		_hollow_pull.emitting = shown
+
+func _set_hollow_stress(value: int) -> void:
+	hollow_stress = clampi(value, 0, 3)
+	if is_node_ready():
+		_apply_hollow_stress()
 
 # ── Combat ───────────────────────────────────────────────────────────────────
 

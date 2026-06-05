@@ -67,27 +67,34 @@ recovery_{dir} → row * 64,  col 5 * 64,  64×64  (2 frames: cols 5–6)
 
 Idle and Move both use a **single static frame per direction** (col 0 of `warrior_idle_attack.png`). No frame animation. All visual life comes from the canvas shader and particles.
 
-Shader: `assets/shaders/warrior_hover.gdshader`  
+Shader: `assets/shaders/warrior_hover.gdshader` — **fragment-only** (hem glow + shimmer).
 Applied to: `Sprite8Dir` (the `Sprite2D` node active during IDLE and MOVE states).
+
+The **hover bob + sway are driven in GDScript** (`_update_hover()` in `warrior.gd`), not
+the shader, so the Hollow nodes (`HollowVoid`/`HollowGlow`/`HollowPull`) share the same
+per-frame offset and stay welded to the chest as the body bobs. Phase is integrated
+incrementally (`_bob_phase += speed * delta`) so the movement-driven speed change never
+makes the sprite race through cycles — the old `sin(TIME * speed)` form did, which is
+what caused the visible up/down "jump" when starting and stopping. Bob runs only in
+IDLE/MOVE; it zeroes in every other state.
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `hover_speed` | 0.8 | Bob cycle speed (rad/s) |
-| `hover_pixels` | 1.5 | Vertical bob amplitude (px) at idle |
+| `hover_speed` | 0.8 | Paces the fragment animation (hem pulse, shimmer); also base bob speed in GDScript |
 | `hem_tint` | `#D4803A` | Amber colour for hem glow |
 | `hem_strength` | 0.5 | Hem glow intensity at idle |
 | `hem_threshold` | 0.7 | UV.y cutoff — bottom 30% gets glow |
-| `move_intensity` | 0.0 | 0=idle, 1=moving. Tweened by warrior.gd. Scales bob, sway, glow, and shimmer. |
+| `move_intensity` | 0.0 | 0=idle, 1=moving. Tweened by warrior.gd. Scales hem + shimmer (shader) and bob + sway (GDScript). |
 
-#### What `move_intensity` does in the shader
+#### What `move_intensity` does
 
-| Effect | Idle | Full move |
-|---|---|---|
-| Vertical bob | 1.5 px | ~3.6 px |
-| Bob speed | 0.8 | ~1.16 |
-| Horizontal sway | 0 px | ±1.2 px pendulum (different frequency) |
-| Hem glow | 0.5 strength | ~0.85 strength |
-| Lavender shimmer | off | Subtle #A080E0 flicker at top of sprite (18% max) |
+| Effect | Idle | Full move | Driven by |
+|---|---|---|---|
+| Vertical bob | 1.5 px | ~2.4 px | GDScript `_update_hover` |
+| Bob speed | 0.8 | ~1.16 | GDScript `_update_hover` |
+| Horizontal sway | 0 px | ±1.2 px pendulum (different frequency) | GDScript `_update_hover` |
+| Hem glow | 0.5 strength | ~0.85 strength | shader fragment |
+| Lavender shimmer | off | Subtle #A080E0 flicker at top of sprite (18% max) | shader fragment |
 
 `move_intensity` is tweened to 1.0 over 0.18s on MOVE entry and back to 0.0 over 0.25s on MOVE exit, via `_tween_move_intensity()` in `warrior.gd`.
 
@@ -97,7 +104,11 @@ Runs during both IDLE and MOVE. Adds a slow alpha breath (0.75→1.0, 0.45s each
 
 #### `NotationDrift` particles
 
-`CPUParticles2D` node, always emitting. During MOVE, `direction` is set to `-velocity_dir` each physics frame so fragments trail behind movement. Resets to `Vector2(0, -1)` on MOVE exit.
+`GPUParticles2D` node (`warrior.tscn`), configured at runtime in `warrior.gd::_setup_notation_drift()`. Always emitting. Sheds random notation glyphs sampled from `notation_glyphs.png` (4-frame strip): a `CanvasItemMaterial` with `particles_animation` + per-particle randomised `anim_offset` gives each glyph a different static frame (torn stave / notehead / barline).
+
+`local_coords = false` (world space) — emitted glyphs stay where they were born, so as the warrior moves away they settle into the trail of "score debris" the GDD calls for. No per-frame direction push needed; the trail falls out of the same emitter.
+
+`amount_ratio` tweens from `NOTATION_IDLE_RATIO` (0.4) to `NOTATION_MOVE_RATIO` (0.8) on MOVE enter/exit (`_tween_notation_intensity`, called from `_tween_move_intensity`), and the whole range is multiplied by `_NOTATION_TIER_SCALE[tribe_coherence_tier]` so the warrior drifts denser and less stable in the outer rings.
 
 ---
 
@@ -210,7 +221,10 @@ Two sprite nodes serve different states. `Sprite8Dir` is visible during IDLE and
 CharacterBody2D (Warrior)
 ├── Sprite8Dir (Sprite2D)          ← IDLE/MOVE: rotation sprites + hover shader
 ├── Sprite (AnimatedSprite2D)      ← ATTACK, HURT, DYING, SUMMONING, ECHO_ACTIVE
-├── NotationDrift (CPUParticles2D) ← cloak edge particle drift (always active)
+├── NotationDrift (GPUParticles2D) ← world-space notation drift + trail (drawn behind body)
+├── HollowPull (GPUParticles2D)    ← notation drawn inward to the chest, ratio = hollow_stress
+├── HollowVoid (Sprite2D)          ← dark #0D0A1E recess (normal blend) — the absence the ember burns in
+├── HollowGlow (Sprite2D)          ← additive ember core sunk inside HollowVoid, dims with hollow_stress
 ├── CollisionShape2D
 ├── Camera2D
 ├── AttackCooldown (Timer)         ← 0.35s, prevents rapid re-attack
@@ -270,6 +284,11 @@ The sprite frame should contain:
 | NW (up-left) | None | Form turned away (mirrors NE) |
 | W (left) | Sliver | 1px #F0E8D8 at right edge of form only (mirrors E) |
 | SW (down-left) | Partial | 2px #F0E8D8 slightly right of center (mirrors SE) |
+
+This gate (`_refresh_hollow_facing()` · `_HOLLOW_DIR_VIS`) applies in **every directional
+state** — IDLE/MOVE *and* the attack/echo states, which all pose toward `_facing_dir`. So
+the Hollow stays dark when the back is turned even mid-attack. HURT/DYING/SUMMONING use
+single-direction front sheets and keep the wound at full.
 
 ---
 
