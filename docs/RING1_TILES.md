@@ -6,12 +6,19 @@ import + wiring reference only.
 
 ## Source
 
-Tiles generated with PixelLab (top-down Wang / corner-based autotiling).
-The Cowork sandbox can't reach `api.pixellab.ai`, so assets are fetched locally.
+Generated with the PixelLab MCP server (reachable from this environment — no
+local `fetch_tiles.sh` needed). Two tools, chosen by job:
 
-```
-cd assets/tiles/ring1 && bash fetch_tiles.sh
-```
+- **Seamless ground** → `create_topdown_tileset` (corner-based Wang). This is the
+  only PixelLab tool that produces *seamless repeating* terrain + peering metadata.
+- **Props / set-dressing** → `create_map_object` (transparent-background objects).
+
+`create_tiles_pro` was tried first for the ground (48px, wanting a chunkier feel)
+and **rejected**: it makes discrete bounded tiles, not seamless terrain — multi-
+material calls baked hard seams *inside* tiles, and a uniform single-material call
+in segmentation mode produced empty tiles. Use it for discrete tiles only, never
+for seamless ground. Props are kept on an isometric ("high top-down") camera to
+match the GDD concept art; the warrior reads slightly flatter (accepted).
 
 ## Palette (locked — The Pale Reaches)
 
@@ -28,26 +35,40 @@ higher saturation than natural terrain (built when the world had more warmth).
 
 ## Tilesets
 
-### Ground → Path  (`ground_path.png`)
-- PixelLab tileset id: `3769b303-59b4-4f70-945d-bfb58ea8a74c`
-- 16 tiles, 32×32 px, high top-down, selective outline / medium shading / medium detail
-- Corner-based (Wang) autotile: **lower = pale grey-blue stone**, **upper = faint tan path**
+### Ground → Path  (`ground_path.png`)  — v2, current
+- PixelLab tileset id: `e829f3a7-7f22-4ef3-8264-38a4e72ad6c2`
+- 16 tiles, 32×32 px, high top-down, selective outline / medium shading / **low detail**
+- Corner-based (Wang) autotile: **lower = bare cool grey-blue stone**, **upper = faint worn tan path**
+- Verified seamless (3×3 self-tile of the all-stone tile shows no seams).
 - Base tile IDs (for chaining future connected sets in PixelLab):
-  - ground (lower): `61b9b31b-62ed-481d-ba6b-9d044f2a604c`  ← chain flora off this
-  - path (upper): `581d9b25-7696-40f2-aaf8-7c10b520486b`
+  - stone (lower): `1054154d-a21a-4d77-af07-503032fcb646`
+  - path (upper): `8898cf71-0ef4-4b20-a8b1-a6155095f1c9`
 - `ground_path.metadata.json` holds the per-tile corner values for terrain/peering setup.
+- Replaced the v1 set (`3769b303-…`, "not ideal"). The old `ground_flora.png`
+  (`13fd8f44-…`) is **no longer wired** — flora is now props (below). It chained off a
+  *different* stone base (`61b9b31b-…`), so it must not be re-added to `ground.tres`
+  (two distinct stone images under one `stone` terrain → Godot's corner matcher picks
+  between them and the rework silently regresses).
 
-### Ground → Flora  (`ground_flora.png`)
-- PixelLab tileset id: `13fd8f44-82bd-4952-a431-d2ab0cabc728`
-- 16 tiles, 32×32 px, high top-down, selective outline / medium shading / medium detail
-- **Chained off the same ground base** (`61b9b31b-…`) as Ground→Path, so the stone
-  edges are identical — the two sets share a ground terrain and tile together cleanly.
-- Corner-based (Wang) autotile: **lower = pale grey-blue stone**, **upper = pale translucent flora cluster** (`#D4DCE8`)
-- Base tile IDs:
-  - ground (lower): `61b9b31b-62ed-481d-ba6b-9d044f2a604c`
-  - flora (upper): `9336976c-25ef-4e20-8ecc-950a4b0ee857`
-- In one Godot Terrain Set, make "stone" the shared base terrain, then add "path" and
-  "flora" as two more terrains painting over it — both share the same ground edge.
+### Props  (`props/*.png`)  — `create_map_object`, transparent bg, high top-down
+Discrete set-dressing placed by hand (Y-sorted), not autotiled. Matches the GDD
+concept art's Pale Reaches (ruins, standing stones, bunting, pale flora).
+
+| File | px | PixelLab object id |
+|------|----|--------------------|
+| `ruin.png` (domed ruin, hero) | 160×160 | `7ada9220-7202-4f8e-9a49-aa09e2835697` |
+| `archway.png` (broken arch) | 112×112 | `bbf89273-cec9-488f-8de3-4adba6211940` |
+| `bunting.png` (faded pennants) | 112×80 | `6c93567c-250d-4ef3-bc58-37cbac59395c` |
+| `wall.png` (ruined wall) | 96×64 | `f06540c7-8227-4d3c-8c86-2df16046d6c7` |
+| `monolith.png` (standing stone) | 48×64 | `eaae4872-7fff-44b8-bde2-695380acf11e` |
+| `rubble.png` (broken blocks) | 64×48 | `aa12e9bd-5122-4bd8-a18a-65470ec37985` |
+| `flora.png` (pale clump) | 48×48 | `f622478e-1be5-49dc-8a6b-f3cfd756bfe7` |
+| `shrub.png` (dead shrub) | 56×72 | `0878a945-a58d-415c-8948-55b6703e69b6` |
+
+`flora.png` was color-clamped after generation (it generated pink) toward the cool
+palette. Map objects auto-delete from PixelLab after 8h — the PNGs here are the
+source of truth. Wired in `main.tscn` as `Sprite2D`s (`centered=false`,
+`offset=(-w/2,-h)` so each sorts by its base).
 
 ### Plateau / Cliff edges  (`cliff.png`)
 - PixelLab tileset id: `30a69993-5a78-49ec-952f-3ffc3ae35a92`
@@ -81,13 +102,12 @@ metadata. Re-run headless after re-fetching:
     --script res://scripts/build_ring1_tilesets.gd
 ```
 
-- **`ground.tres`** — both ground PNGs as two atlas sources in **one corner-match
-  terrain set** with three terrains: `stone` (0, shared base), `path` (1), `flora` (2).
-  Path tiles map `lower→stone / upper→path`; flora tiles map `lower→stone / upper→flora`,
-  so the two sets share the stone edge and tile together. Corner mapping is
-  `NW→top-left, NE→top-right, SE→bottom-right, SW→bottom-left`. The build script
-  reloads the result and asserts the terrain set/count/mode and spot-checks the
-  all-stone / all-path tiles' peering bits.
+- **`ground.tres`** — the v2 `ground_path.png` as a **single** atlas source in one
+  corner-match terrain set with two terrains: `stone` (0) and `path` (1)
+  (`lower→stone / upper→path`). Single stone image — no competing all-stone tiles.
+  Corner mapping is `NW→top-left, NE→top-right, SE→bottom-right, SW→bottom-left`.
+  The build script reloads the result and asserts terrain set count = 1, terrains = 2,
+  mode = MATCH_CORNERS, and spot-checks the all-stone / all-path tiles' peering bits.
 - **`cliff.tres`** — atlas source over the full 4×8 cell grid (32 non-empty tiles) plus
   one empty physics layer (scaffold). **Terrain matching and per-tile collision/Y-sort
   are NOT wired** — the upstream cliff metadata's tile placement is unreliable
@@ -97,12 +117,25 @@ metadata. Re-run headless after re-fetching:
 
 ## Status / next
 
-- [x] Ground → Path (muted v2) generated. First attempt `281d78b1-…` discarded (too saturated).
-- [x] Ground → Flora generated, chained off ground base `61b9b31b-…` (pale translucent clusters, `#D4DCE8`).
-- [x] Plateau / cliff edges generated (full-height transition, plateau top reuses ground base).
-- [x] Fetched tiles + built `ground.tres` (stone/path/flora corner-match terrain set, verified).
-- [x] Built `cliff.tres` atlas + physics-layer scaffold.
-- [x] Playtest wiring: `scenes/tile_test.tscn` (standalone) and `main.tscn` paint `ground.tres`
-  via `scripts/ground_layer.gd` (runtime `set_cells_terrain_connect`, demo path cross + flora
-  patch). Verified headless: 135/135 cells autotile, no missing-tile errors.
-- [ ] Wire cliff terrain matching + cliff-face collision / Y-sort in the editor (metadata unusable).
+- [x] **Reworked ground** (v2 `e829f3a7-…`, stone→path, muted/low-detail). Verified
+  seamless via 3×3 self-tile. Replaced v1 (`3769b303-…`).
+- [x] **Props** generated via `create_map_object` (ruin, archway, bunting, wall,
+  monolith, rubble, flora, shrub) → `props/`. `flora.png` color-clamped.
+- [x] Rebuilt `ground.tres` (single-stone-source stone/path corner-match set) —
+  `build_ring1_tilesets.gd` BUILD OK, verify passed (sets=1, terrains=2, peering OK).
+- [x] `ground_layer.gd` paints **stone only** (`layout = PLAIN_STONE`). Flora dropped.
+- [x] Props wired into `main.tscn` as Y-sorted `Sprite2D`s.
+- [x] **Confirmed in a live render** (windowed Godot, captured frame): seamless
+  stone, all 8 props correct, cohesive palette, sane occlusion.
+- [ ] **No path — stone-only by decision.** The atlas still holds the v2 path tiles
+  but they're not painted. `create_topdown_tileset` **cannot** produce the soft,
+  borderless, same-level worn trail the GDD wants — three attempts all drew a hard
+  bordered edge between terrains (selective-outline → white rim; `transition_size`
+  0.5 → raised ledge + drop-shadow; 0.0 + lineless + flat → stone-brick curb with a
+  dark outline). The tool is for *distinct* terrains (water↔grass), not subtle
+  same-ground trails. **Do not re-run `create_topdown_tileset` for the path.** If a
+  path is wanted later, make it **soft `create_map_object` decals** (transparent
+  dust-trail segments) placed/scattered over the stone, like the other props.
+- [ ] **Cliff unchanged** — `cliff.tres` is still the old v1 scaffold (`30a69993-…`);
+  terrain matching + cliff-face collision/Y-sort still unwired (metadata unreliable).
+- [ ] Optional: a few stone variation tiles to break the faint single-tile repeat.

@@ -4,8 +4,10 @@
 #       --script res://scripts/build_ring1_tilesets.gd
 #
 # Produces:
-#   assets/tiles/ring1/ground.tres  — ground_path + ground_flora as two atlas
-#       sources in ONE corner-match terrain set (stone=0, path=1, flora=2).
+#   assets/tiles/ring1/ground.tres  — ground_path (v2 seamless stone→path) as a
+#       single atlas source in ONE corner-match terrain set (stone=0, path=1).
+#       Flora is no longer a ground terrain — it is placed as map-object props
+#       (assets/tiles/ring1/props/), so the ground has exactly one stone image.
 #   assets/tiles/ring1/cliff.tres   — atlas source + physics layer scaffold.
 #       Cliff terrain/Y-sort is deferred to in-editor setup: the upstream
 #       metadata's tile placement is unreliable (see docs/RING1_TILES.md).
@@ -25,7 +27,6 @@ const CORNER_BITS := {
 # Terrain indices in the shared ground terrain set.
 const T_STONE := 0
 const T_PATH := 1
-const T_FLORA := 2
 
 
 func _init() -> void:
@@ -85,8 +86,7 @@ func _assign_corners(src: TileSetAtlasSource, tiles: Array, terrain_set: int,
 
 func _build_ground() -> bool:
 	var path_meta := _load_meta("ground_path.metadata.json")
-	var flora_meta := _load_meta("ground_flora.metadata.json")
-	if path_meta.is_empty() or flora_meta.is_empty():
+	if path_meta.is_empty():
 		return false
 
 	var ts := TileSet.new()
@@ -98,27 +98,20 @@ func _build_ground() -> bool:
 	ts.set_terrain_set_mode(ts_idx, TileSet.TERRAIN_MODE_MATCH_CORNERS)
 	ts.add_terrain(ts_idx)  # 0
 	ts.add_terrain(ts_idx)  # 1
-	ts.add_terrain(ts_idx)  # 2
 	ts.set_terrain_name(ts_idx, T_STONE, "stone")
 	ts.set_terrain_name(ts_idx, T_PATH, "path")
-	ts.set_terrain_name(ts_idx, T_FLORA, "flora")
 	ts.set_terrain_color(ts_idx, T_STONE, Color("#8898a8"))
 	ts.set_terrain_color(ts_idx, T_PATH, Color("#b8a890"))
-	ts.set_terrain_color(ts_idx, T_FLORA, Color("#d4dce8"))
 
 	var path_src := _add_atlas(ts, "ground_path.png")
 	var path_tiles := _create_tiles(path_src, path_meta)
 	_assign_corners(path_src, path_tiles, ts_idx, T_STONE, T_PATH)
 
-	var flora_src := _add_atlas(ts, "ground_flora.png")
-	var flora_tiles := _create_tiles(flora_src, flora_meta)
-	_assign_corners(flora_src, flora_tiles, ts_idx, T_STONE, T_FLORA)
-
 	var err := ResourceSaver.save(ts, DIR + "ground.tres")
 	if err != OK:
 		push_warning("save ground.tres failed: %d" % err)
 		return false
-	print("wrote ground.tres (path tiles=%d, flora tiles=%d)" % [path_tiles.size(), flora_tiles.size()])
+	print("wrote ground.tres (path tiles=%d, single stone source)" % path_tiles.size())
 	return true
 
 
@@ -177,8 +170,8 @@ func _verify() -> bool:
 	if ts.get_terrain_sets_count() != 1:
 		push_warning("verify: terrain set count = %d (want 1)" % ts.get_terrain_sets_count())
 		ok = false
-	if ts.get_terrains_count(0) != 3:
-		push_warning("verify: terrain count = %d (want 3)" % ts.get_terrains_count(0))
+	if ts.get_terrains_count(0) != 2:
+		push_warning("verify: terrain count = %d (want 2)" % ts.get_terrains_count(0))
 		ok = false
 	if ts.get_terrain_set_mode(0) != TileSet.TERRAIN_MODE_MATCH_CORNERS:
 		push_warning("verify: terrain mode not MATCH_CORNERS")
