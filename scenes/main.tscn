@@ -1,9 +1,10 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/warrior.tscn" id="1"]
 [ext_resource type="Script" path="res://scripts/main.gd" id="2"]
-[ext_resource type="Script" path="res://scripts/floor_grid.gd" id="3"]
+[ext_resource type="Script" path="res://scripts/ground_layer.gd" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/hud.tscn" id="4"]
+[ext_resource type="TileSet" path="res://assets/tiles/ring1/ground.tres" id="5"]
 
 [sub_resource type="RectangleShape2D" id="1"]
 size = Vector2(8.0, 290.0)
@@ -20,7 +21,8 @@ size = Vector2(496.0, 8.0)
 [node name="Main" type="Node2D"]
 script = ExtResource("2")
 
-[node name="FloorGrid" parent="." type="Node2D"]
+[node name="GroundLayer" parent="." type="TileMapLayer"]
+tile_set = ExtResource("5")
 script = ExtResource("3")
 
 [node name="Warrior" parent="." instance=ExtResource("1")]
