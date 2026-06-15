@@ -220,7 +220,14 @@ func _handle_movement(delta: float) -> void:
 				velocity = velocity.lerp(Vector2.ZERO, DECEL * delta)
 	move_and_slide()
 
+# Movement direction in sim space. The 3D iso layer (Phase 2) injects a
+# camera-relative provider so "up" stays away-from-camera as the camera orbits;
+# unset, this is the original screen-space WASD read (2D behaviour unchanged).
+var input_provider: Callable
+
 func _read_dir() -> Vector2:
+	if input_provider.is_valid():
+		return input_provider.call()
 	return Vector2(
 		Input.get_axis("move_left", "move_right"),
 		Input.get_axis("move_up", "move_down")

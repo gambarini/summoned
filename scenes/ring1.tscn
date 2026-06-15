@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://0prbonjp40tn"]
+
+[ext_resource type="Script" path="res://scripts/ring1.gd" id="1_ring1"]
+
+[node name="Ring1" type="Node"]
+script = ExtResource("1_ring1")

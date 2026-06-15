@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://0prbotc7nfsn"]
+
+[ext_resource type="Script" path="res://scripts/ring1_verify.gd" id="1_ring1verify"]
+
+[node name="Ring1Verify" type="Node"]
+script = ExtResource("1_ring1verify")
