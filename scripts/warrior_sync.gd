@@ -38,6 +38,39 @@ const NOTATION_SHEET := preload("res://assets/sprites/notation_glyphs.png")
 const NOTATION_Y := 1.7            # chest height on the billboard
 const _PX := 1.0 / SimSpace.PIXELS_PER_UNIT
 
+# --- The Hollow (chest wound) --------------------------------------------
+# 3D port of warrior.gd's Hollow: a dark void recess + an additive ember core
+# sunk inside it (the dark gap sells the depth) + an inward notation pull. Scale
+# with the warrior's live `hollow_stress` (a public @export — no warrior change).
+# Visibility is gated on the *displayed* billboard facing (`_facing`), not the
+# warrior's sim facing: the wound is painted on the sprite, so it must follow the
+# sheet that's actually shown — which also makes it appear/vanish correctly as the
+# camera orbits. Param arrays re-authored from warrior.gd's `_HOLLOW_*`.
+const HOLLOW_Y := 1.7              # chest height (matches NOTATION_Y / 2D y=4)
+const HOLLOW_DISC_PX := 32         # gradient disc resolution, like the 2D sprite
+const HOLLOW_VOID_SCALE := 0.72    # dark recess — kept wider than the ember
+const HOLLOW_GLOW_SCALE := 0.34    # burning core — tight point sunk in the void
+const HOLLOW_BRIGHTNESS := [1.0, 0.85, 0.65, 0.4]   # ember dims as it opens
+const HOLLOW_RADIUS := [1.0, 1.2, 1.5, 1.9]         # both discs widen
+const HOLLOW_INWARD := [0.0, 0.25, 0.6, 0.9]        # pull amount_ratio
+const HOLLOW_PULSE_PERIOD := 1.8   # ember breathing period (s), matches 2D tween
+# Visibility per *displayed* facing (front-of-chest wound). WarriorSync's own
+# "south"/"north-east" vocabulary; mirrors warrior.gd's `_HOLLOW_DIR_VIS`.
+const HOLLOW_DIR_VIS := {
+	"south": 1.0, "south-east": 0.6, "south-west": 0.6,
+	"east": 0.3, "west": 0.3,
+	"north-east": 0.0, "north": 0.0, "north-west": 0.0,
+}
+
+# --- Hem / shimmer overlay (warrior_hover.gdshader, 3D port) --------------
+# An additive billboard quad layered over the base sprite: amber cloak hem +
+# lavender top shimmer, scaled by movement. Samples the same 8-dir sheet so UVs
+# line up. The base Sprite3D is untouched.
+const HEM_SHADER := preload("res://assets/shaders/warrior_hover_3d.gdshader")
+const BILLBOARD_PIXEL_SIZE := 0.045
+const SHEET_PX := 64
+const HEM_MOVE_RATE := 6.0   # how fast move_intensity eases toward idle/move
+
 # Fixed raw input for programmatic/headless drive (capture harness). The
 # `Vector2.INF` sentinel means "read live Input" (the normal play path).
 var raw_input_override := Vector2.INF
@@ -50,6 +83,16 @@ var _facing := "south"
 var _bob_phase := 0.0
 var _bob_y := 0.0  # current hover offset; a future Hollow node rides this too
 var _notation: GPUParticles3D
+var _hollow: Node3D
+var _hollow_void: MeshInstance3D
+var _hollow_void_mat: StandardMaterial3D
+var _hollow_ember: MeshInstance3D
+var _hollow_ember_mat: StandardMaterial3D
+var _hollow_pull: GPUParticles3D
+var _hollow_pulse := 0.0
+var _hem: MeshInstance3D
+var _hem_mat: ShaderMaterial
+var _hem_move := 0.0
 
 
 ## Current 8-dir sheet name (for verification / debugging).
@@ -60,6 +103,12 @@ func get_facing() -> String:
 ## The billboard's world position — output of the sim->world transform.
 func get_billboard_position() -> Vector3:
 	return _billboard.position
+
+
+## Whether the Hollow is currently shown (for verification). Tracks the displayed
+## billboard facing — false when a back sheet is up (the wound is front-of-chest).
+func hollow_shown() -> bool:
+	return _hollow != null and _hollow.visible
 
 
 ## Camera-relative attack aim (Phase 3). The 2D cursor no longer maps to the
@@ -94,7 +143,7 @@ func setup(rig: IsoRig, warrior: CharacterBody2D) -> void:
 	_billboard.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_billboard.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	_billboard.shaded = false
-	_billboard.pixel_size = 0.045
+	_billboard.pixel_size = BILLBOARD_PIXEL_SIZE
 	rig.add_world_child(_billboard)
 
 	# The billboard is the warrior now: suppress all 2D presentation in one line
@@ -117,6 +166,8 @@ func setup(rig: IsoRig, warrior: CharacterBody2D) -> void:
 	_warrior.ground_pulse.connect(_on_ground_pulse)
 
 	_setup_notation()  # the drifting-score-debris identity, as 3D particles
+	_setup_hollow()    # the burning chest wound (gated on facing + stress)
+	_setup_hem()       # amber hem + lavender shimmer overlay (move-driven)
 	_sync_position()  # place the billboard before the first frame
 
 
@@ -270,6 +321,205 @@ func _build_notation_scale_curve() -> CurveTexture:
 	return tex
 
 
+# --- The Hollow (chest wound, 3D port) -----------------------------------
+
+func _setup_hollow() -> void:
+	_hollow = Node3D.new()
+	_hollow.name = "Hollow"
+	_rig.add_world_child(_hollow)
+
+	# Void: dark radial disc, normal blend — carves a recess into the chest.
+	_hollow_void = MeshInstance3D.new()
+	_hollow_void.name = "HollowVoid"
+	_hollow_void_mat = _disc_material(_make_radial_void_tex(), BaseMaterial3D.BLEND_MODE_MIX, 2)
+	_hollow_void.mesh = _disc_mesh(_hollow_void_mat)
+	_hollow.add_child(_hollow_void)
+
+	# Ember: smaller additive core sunk inside the void (dark gap = depth).
+	_hollow_ember = MeshInstance3D.new()
+	_hollow_ember.name = "HollowEmber"
+	_hollow_ember_mat = _disc_material(_make_radial_glow_tex(), BaseMaterial3D.BLEND_MODE_ADD, 3)
+	_hollow_ember.mesh = _disc_mesh(_hollow_ember_mat)
+	_hollow.add_child(_hollow_ember)
+
+	# Pull: notation motes drawn inward toward the wound (more under stress). A
+	# sphere shell (not the 2D planar ring) so the pull reads from any camera yaw.
+	_hollow_pull = GPUParticles3D.new()
+	_hollow_pull.name = "HollowPull"
+	_hollow_pull.amount = 16
+	_hollow_pull.lifetime = 0.85
+	_hollow_pull.local_coords = true     # motes belong to the wound, follow it
+	_hollow_pull.amount_ratio = 0.0      # set per stress each frame
+
+	var pquad := QuadMesh.new()
+	pquad.size = Vector2(0.45, 0.45)
+	var pgm := StandardMaterial3D.new()
+	pgm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	pgm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pgm.albedo_texture = NOTATION_SHEET
+	pgm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	pgm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	pgm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	pgm.billboard_keep_scale = true
+	pgm.particles_anim_h_frames = 4
+	pgm.particles_anim_v_frames = 1
+	pgm.particles_anim_loop = false
+	pgm.no_depth_test = true
+	pgm.render_priority = 3
+	pquad.material = pgm
+	_hollow_pull.draw_pass_1 = pquad
+
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE_SURFACE
+	pm.emission_sphere_radius = 22.0 * _PX
+	pm.initial_velocity_min = 0.0
+	pm.initial_velocity_max = 0.0
+	pm.radial_accel_min = -55.0 * _PX
+	pm.radial_accel_max = -35.0 * _PX    # negative = pulled toward the wound
+	pm.tangential_accel_min = 8.0 * _PX
+	pm.tangential_accel_max = 18.0 * _PX # slight inward spiral
+	pm.scale_min = 0.28
+	pm.scale_max = 0.42
+	pm.angle_min = -180.0
+	pm.angle_max = 180.0
+	pm.anim_offset_min = 0.0
+	pm.anim_offset_max = 1.0
+	pm.color_ramp = _build_hollow_pull_ramp()
+	_hollow_pull.process_material = pm
+	_hollow.add_child(_hollow_pull)
+
+	_update_hollow(0.0)
+
+
+# A camera-facing disc quad sharing one billboard material. `no_depth_test` keeps
+# the wound drawn over the body sprite (a billboard at the same chest depth);
+# `render_priority` orders void (1) under ember (2).
+func _disc_mesh(mat: StandardMaterial3D) -> QuadMesh:
+	var quad := QuadMesh.new()
+	quad.size = Vector2.ONE * (HOLLOW_DISC_PX * _PX)
+	quad.material = mat
+	return quad
+
+
+func _disc_material(tex: Texture2D, blend: int, priority: int) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = blend
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.albedo_texture = tex
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	mat.no_depth_test = true
+	mat.render_priority = priority
+	return mat
+
+
+func _update_hollow(delta: float) -> void:
+	if _hollow == null:
+		return
+	_hollow.position = SimSpace.to_world(_warrior.global_position, HOLLOW_Y + _bob_y)
+	var s := clampi(_warrior.hollow_stress, 0, 3)
+	var f: float = HOLLOW_DIR_VIS.get(_facing, 1.0)
+	var shown := f > 0.0
+	_hollow.visible = shown
+	if shown:
+		_hollow_void.scale = Vector3.ONE * (HOLLOW_VOID_SCALE * HOLLOW_RADIUS[s])
+		_hollow_ember.scale = Vector3.ONE * (HOLLOW_GLOW_SCALE * HOLLOW_RADIUS[s])
+		# Void alpha = facing factor (fades the recess on side facings, like 2D).
+		_hollow_void_mat.albedo_color.a = f
+		# Ember = stress brightness * facing * breathing pulse (0.6..1.0).
+		_hollow_pulse += delta
+		var pulse := 0.8 + 0.2 * sin(_hollow_pulse * (TAU / HOLLOW_PULSE_PERIOD))
+		_hollow_ember_mat.albedo_color.a = HOLLOW_BRIGHTNESS[s] * f * pulse
+	_hollow_pull.amount_ratio = HOLLOW_INWARD[s]
+	_hollow_pull.emitting = shown and HOLLOW_INWARD[s] > 0.0
+
+
+# Ember core: hot #F0E8D8 center → warm #D4803A → faint cold #7B4EA0 rim. Tight
+# falloff so the bright part stays inside the void, leaving the dark recess gap.
+func _make_radial_glow_tex() -> GradientTexture2D:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.36, 0.62, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.941, 0.910, 0.847, 1.0),
+		Color(0.941, 0.910, 0.847, 0.9),
+		Color(0.831, 0.502, 0.227, 0.45),
+		Color(0.483, 0.306, 0.627, 0.12),
+		Color(0.483, 0.306, 0.627, 0.0),
+	])
+	return _radial_tex(grad)
+
+
+# The absence: opaque #0D0A1E core fading to transparent — the hole the ember
+# burns inside of. Normal-blended so it deepens the chest to near-black.
+func _make_radial_void_tex() -> GradientTexture2D:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.5, 0.8, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.051, 0.039, 0.118, 1.0),
+		Color(0.051, 0.039, 0.118, 0.92),
+		Color(0.051, 0.039, 0.118, 0.4),
+		Color(0.051, 0.039, 0.118, 0.0),
+	])
+	return _radial_tex(grad)
+
+
+func _radial_tex(grad: Gradient) -> GradientTexture2D:
+	var tex := GradientTexture2D.new()
+	tex.gradient = grad
+	tex.width = HOLLOW_DISC_PX
+	tex.height = HOLLOW_DISC_PX
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	return tex
+
+
+# Notation (#A080E0) fades in, then shifts to the wound's heat (#F0E8D8) as it is
+# consumed near the centre.
+func _build_hollow_pull_ramp() -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.2, 0.85, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.627, 0.502, 0.878, 0.0),
+		Color(0.627, 0.502, 0.878, 0.85),
+		Color(0.941, 0.910, 0.847, 0.8),
+		Color(0.941, 0.910, 0.847, 0.0),
+	])
+	var tex := GradientTexture1D.new()
+	tex.gradient = grad
+	return tex
+
+
+# --- Hem / shimmer overlay (3D port) -------------------------------------
+
+func _setup_hem() -> void:
+	_hem = MeshInstance3D.new()
+	_hem.name = "WarriorHem"
+	var quad := QuadMesh.new()
+	quad.size = Vector2.ONE * (SHEET_PX * BILLBOARD_PIXEL_SIZE)
+	_hem_mat = ShaderMaterial.new()
+	_hem_mat.shader = HEM_SHADER
+	_hem_mat.set_shader_parameter("tex", _dir_textures[_facing])
+	_hem_mat.render_priority = 1  # over the base sprite (0), under the Hollow (2+)
+	quad.material = _hem_mat
+	_hem.mesh = quad
+	_rig.add_world_child(_hem)
+
+
+func _update_hem(delta: float) -> void:
+	if _hem == null:
+		return
+	_hem.position = SimSpace.to_world(_warrior.global_position, HOVER_Y + _bob_y)
+	# Ease move_intensity toward 1 while moving, 0 while idle (the 2D shader was
+	# tweened on MOVE enter/exit; here we read the body's velocity directly).
+	var target := 1.0 if _warrior.velocity.length() > MOVE_EPSILON else 0.0
+	_hem_move = move_toward(_hem_move, target, HEM_MOVE_RATE * delta)
+	_hem_mat.set_shader_parameter("move_intensity", _hem_move)
+
+
 # Camera-relative sim-space move direction from raw input (live or overridden).
 func _camera_dir() -> Vector2:
 	var raw := raw_input_override
@@ -292,6 +542,8 @@ func _process(delta: float) -> void:
 	# World-space emitter follows the warrior; emitted glyphs stay put -> trail.
 	if _notation:
 		_notation.position = SimSpace.to_world(_warrior.global_position, NOTATION_Y)
+	_update_hollow(delta)
+	_update_hem(delta)
 
 
 func _sync_position() -> void:
@@ -306,3 +558,5 @@ func _sync_facing() -> void:
 	if dir_name != "" and dir_name != _facing:
 		_facing = dir_name
 		_billboard.texture = _dir_textures[_facing]
+		if _hem_mat:
+			_hem_mat.set_shader_parameter("tex", _dir_textures[_facing])

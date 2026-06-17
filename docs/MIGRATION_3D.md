@@ -1,28 +1,26 @@
 # Migration Plan — 2D Top-Down → Low-Res 3D Isometric
 
-> Status: **Phases 0–4 done + Phase 2b part 1** (2026-06-16) — the Ring 1 run loop plays in
+> Status: **Phases 0–4 + all of Phase 2b done** (2026-06-17) — the Ring 1 run loop plays in
 > low-res 3D end-to-end (`main.tscn` = rig + terrain + synced warrior/enemy/arc billboards, 2D
-> HUD on top, `game_state.gd` unchanged), and the warrior's most-felt effects now read in 3D:
-> ability shockwaves (resonance/burst rings → flat 3D ground rings, the Phase-4 seam fixed),
-> hover bob, and notation drift. Still 2D (deferred): the **Hollow** + hem/glow shader (Phase 2b
-> part 2 — Hollow is gated on `hollow_stress`, invisible in normal play) and the `base` diorama
-> (by choice). **Manual playthrough sign-off done (2026-06-17):** the full
-> run→fight→die→`base`→re-summon loop was played end-to-end windowed in 3D (WASD move, mouse
+> HUD on top, `game_state.gd` unchanged), and the warrior's **full visual identity** now reads in
+> 3D: ability shockwaves (resonance/burst → flat 3D ground rings), hover bob, notation drift, the
+> **Hollow** chest wound (void/ember/pull, facing-gated), and the **hem/shimmer** overlay shader.
+> Still 2D by choice: the `base` diorama. **Manual playthrough sign-off done (2026-06-17):** the
+> full run→fight→die→`base`→re-summon loop was played end-to-end windowed in 3D (WASD move, mouse
 > attack, R resonance → 3D ground ring, Q/E + arrows orbit, F extract, real `change_scene_to_file`
-> transitions main→base→main with a clean rig rebuild) — all the deferred "manual sign-off"
-> notes below are now closed, and the three throwaway harnesses (`warrior_iso_test.*`,
-> `ring1_phase3_test.*`, `main_verify.*`) are **deleted**. One control fix from the playthrough:
-> `extract` was rebound **Q → F** (`project.godot` `[input]` only) so Q/E are free for camera
-> orbit without accidentally ending the run. Pipeline reference: `RENDERING_3D.md`. Next:
-> **Phase 2b part 2** (Hollow/shader) or **Phase 5** (rings 2–5 + polish).
+> transitions main→base→main with a clean rig rebuild) — all deferred "manual sign-off" notes are
+> closed, and every per-phase throwaway harness is **deleted**. One control fix from the
+> playthrough: `extract` was rebound **Q → F** (`project.godot` `[input]` only) so Q/E are free for
+> camera orbit. Pipeline reference: `RENDERING_3D.md`. **Next: Phase 5** (rings 2–5, camera
+> pixel-snap, bounds/aspect tuning, optional warm-effect palette retune).
 
 ## Start here (fresh session)
 
-**Phases 0–4 + Phase 2b part 1 are done — the Ring 1 loop plays in 3D and the warrior's core
-identity (bob, notation, ability shockwaves) reads.** Remaining: **Phase 2b part 2** (the Hollow
-void/ember/pull + hem/glow shader — Hollow is gated on `hollow_stress`, so it doesn't show in
-normal play) and **Phase 5** (rings 2–5, camera pixel-snap, bounds/aspect tuning). See entries
-below.
+**Phases 0–4 and all of Phase 2b are done — the Ring 1 loop plays in 3D and the warrior's full
+visual identity reads** (bob, notation, ability shockwaves, the Hollow chest wound, the hem/shimmer
+overlay). Remaining: **Phase 5** (rings 2–5, camera pixel-snap, bounds/aspect tuning, and the
+optional warm-effect palette retune — the cool palette currently cool-shifts the Hollow ember to
+pink, accepted as-is). See entries below.
 
 1. Read `CLAUDE.md` (direction + conventions), then `docs/RENDERING_3D.md` (the proven
    pipeline), then skim the **Phases** section below for what's ✅ DONE and what each
@@ -161,7 +159,7 @@ effects→3D conversion is split out as **Phase 2b** below.
 internal `_facing_dir` **and** the mouse-based `_attack_dir` are in that space too. Invisible
 now (2D hidden), but Phase 2b (Hollow facing) and Phase 3 (attack aim) must account for it.
 
-### Phase 2b — Player effects → 3D (deferred from Phase 2) — 🚧 PARTIAL (2026-06-16)
+### Phase 2b — Player effects → 3D (deferred from Phase 2) — ✅ DONE (2026-06-17)
 Convert the warrior's effect nodes (notation drift, the Hollow void/ember/pull, hover bob,
 glow/trail) from 2D presentation into 3D nodes/billboards driven by the same `WarriorSync`.
 Currently suppressed (not converted) by the body's `visible = false`.
@@ -202,11 +200,47 @@ provider/flag pattern (no logic change).
   across the full run→fight→die→base→re-summon loop. The earlier "integration risk is low" call
   held.
 
-**Still TODO (part 2):** the **Hollow** (void/ember/pull) — gated on `hollow_stress` (@export
-default 0) so it doesn't show in normal play; its billboard must ride `_bob_y` (slot already
-reserved). And the `warrior_hover.gdshader` **hem/shimmer tint** — a canvas_item shader on the
-2D sprite; re-authoring as a spatial shader on the billboard is low-value polish. Glow/trail
-fold into the same pass.
+**Delivered (part 2): the Hollow (2026-06-17).** Faithful 3D port of `warrior.gd`'s chest wound,
+all in `WarriorSync`, **zero `warrior.gd` changes** — `hollow_stress` is already a public
+`@export`, read live each frame.
+- **Three nodes under a `Hollow` Node3D** (rides `HOLLOW_Y` chest height + the reserved `_bob_y`):
+  a dark **void** disc (`#0D0A1E` radial `GradientTexture2D`, normal blend — carves the recess), a
+  smaller additive **ember** core sunk inside it (the dark gap sells the depth, breathing pulse on
+  alpha), and an inward **pull** (`GPUParticles3D`). All are camera-facing billboard quads with
+  `no_depth_test` + `render_priority` (hem 1 < void 2 < ember 3) so the wound draws over the body
+  sprite at the same chest depth without z-fighting. Param arrays (`HOLLOW_RADIUS`/`BRIGHTNESS`/`INWARD`,
+  the gradients) re-authored verbatim from `warrior.gd`'s `_HOLLOW_*`.
+- **The pull uses a sphere *shell* (`EMISSION_SHAPE_SPHERE_SURFACE`), not the 2D planar ring** —
+  radial accel pulls motes inward from any camera yaw (a fixed-plane ring would only read head-on).
+- **Facing gate keys off the *displayed* billboard facing (`WarriorSync._facing`), NOT
+  `warrior._facing_dir`.** In 2D top-down those were the same node; in 3D they diverge (sheet =
+  velocity-vs-camera; `_facing_dir` follows the attack aim). The wound is painted on the sprite, so
+  it must track the shown sheet — `HOLLOW_DIR_VIS` re-keyed to WarriorSync's "south"/"north-east"
+  vocabulary. This also makes the wound correctly hide when the warrior walks away from camera.
+- *Note — the wound shows at `hollow_stress=0` (small, bright ember, no pull motes), faithful to
+  the 2D game; the earlier "invisible in normal play" wording was imprecise. `hollow_stress`
+  scales it open (ember dims, void widens, pull strengthens); the void dominates at stress 3.*
+- *Verified* windowed via the throwaway `scenes/warrior_hollow_test.tscn` (`-- --capture`, now
+  **deleted** after sign-off): the **discriminating back-facing test passed** — front (south) shows
+  the wound, side (east) faint, **back (north) hides it** (`PASS=true`). Captures kept in
+  `docs/gen/hollow_phase2b_{front,front_s1,side,back}.png`. *(Harness gotcha banked: clear the
+  `enemies` group first — a combat death `change_scene_to_file`s and frees the harness, the current
+  scene, tripping the watchdog.)*
+
+**Delivered (part 2): the hem/shimmer shader (2026-06-17).** `warrior_hover.gdshader` re-authored
+as the spatial `assets/shaders/warrior_hover_3d.gdshader` (the 2D canvas_item version stays for the
+2D path). It's an **additive overlay billboard quad** layered over the base sprite (the base
+`Sprite3D` is untouched), sampling the same 8-dir sheet so UVs line up 1:1 — amber cloak hem +
+lavender top shimmer, `move_intensity` eased from the body's velocity in `WarriorSync`. Billboard +
+keep-scale done in `vertex()`; `render_priority 1` (over the sprite, under the Hollow). Verified the
+overlay renders at the cloak bottom, correct orientation (a magenta debug band confirmed it).
+
+*Art finding — ACCEPTED as-is (2026-06-17):* the cool 16-colour palette has no warm slot, so the
+warrior's warm effects cool-shift under the snap — the **ember reads pink** (snaps to the dissonant
+frequency hue) and the **amber hem snaps near-cloak grey** (subtle). Decided to keep the faithful
+warm colours: the cool palette cooling the wound is on-direction. Retuning the ember to
+palette-present hues (pale + lavender) or boosting the hem remains an option if it ever needs to pop
+(Phase 5 polish). **Phase 2b is now complete.**
 
 ### Phase 3 — Enemies & combat (hybrid) — ✅ DONE (2026-06-16)
 Enemies (`enemy`, fleer, phaser) and `attack_arc` get the same treatment: 2D bodies and
