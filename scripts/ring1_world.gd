@@ -63,8 +63,14 @@ func _build_terrain() -> void:
 	add_child(land)
 
 	# --- Plateau the tribe shelters on ---
+	# Width (x) is 28, not the play-area-derived 26.67: at PPU=18 the warrior's body
+	# centre reaches x=+-13.0 world (480/270 roam box minus its 6px half-width), which
+	# is exactly the +-13 lip of a 26-wide plateau, so it teeters on the edge at the
+	# x-extremes (Phase 5 bounds capture: docs/gen/bounds_corner_*). 28 gives ~1u of
+	# ground margin. Depth (z) already has ~4u of slack (warrior reaches z=+-6.94 vs
+	# the +-11 plateau), so only x needs the nudge. See MIGRATION_3D Phase 5.
 	var plateau := CSGBox3D.new()
-	plateau.size = Vector3(26.0, 1.0, 22.0)
+	plateau.size = Vector3(28.0, 1.0, 22.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
 	plateau.material = _mat(COL_GROUND)
 	add_child(plateau)

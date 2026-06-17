@@ -16,8 +16,37 @@ const EnemyBase        := preload("res://scripts/enemy.gd")
 
 const ROT_SPEED := 90.0  # deg/sec free camera orbit (Q/E), pitch stays locked
 
+# Per-ring enemy spawn tables (sim-space px; the bounds are universal, so positions
+# are ring-independent). Keyed by GameState.current_ring; missing keys fall back to
+# Ring 1's set. Spawns live here, not on the terrain builders — the builders own
+# only terrain + palette + environment (Phase 5).
+const SPAWNS := {
+	1: [
+		[EnemyScene,        Vector2(80, 50)],
+		[EnemyScene,        Vector2(400, 50)],
+		[EnemyScene,        Vector2(80, 220)],
+		[EnemyFleerScene,   Vector2(400, 220)],
+		[EnemyPhaserScene,  Vector2(240, 40)],
+	],
+	2: [
+		[EnemyScene,        Vector2(90, 60)],
+		[EnemyFleerScene,   Vector2(390, 60)],
+		[EnemyFleerScene,   Vector2(90, 210)],
+		[EnemyPhaserScene,  Vector2(400, 210)],
+		[EnemyPhaserScene,  Vector2(240, 50)],
+		[EnemyScene,        Vector2(240, 230)],
+	],
+	3: [
+		[EnemyScene,        Vector2(80, 50)],
+		[EnemyPhaserScene,  Vector2(400, 50)],
+		[EnemyPhaserScene,  Vector2(80, 220)],
+		[EnemyFleerScene,   Vector2(400, 220)],
+		[EnemyScene,        Vector2(240, 40)],
+	],
+}
+
 var _rig: IsoRig
-var _ring1: Ring1
+var _world: Node3D       # the current ring's terrain builder (RingNWorld)
 var _warrior_sync: WarriorSync
 var _world_sync: WorldSync
 
@@ -25,12 +54,20 @@ var _enemies_alive := 0
 var _run_ended := false
 
 func _ready() -> void:
-	# --- 3D presentation rig: scene owns it and injects it into Ring1 ---------
+	# --- 3D presentation rig: scene owns it, configures it per ring, mounts ----
+	# the selected ring's terrain builder directly. Per-ring palette/environment
+	# must be set BEFORE add_child (the rig builds its pipeline lazily on _ready
+	# via _ensure_built). Ring 1 keeps the rig's baked defaults (no override) so
+	# its verified render is provably untouched.
 	_rig = load("res://scenes/iso_rig.tscn").instantiate()
+	_world = _make_ring_world(GameState.current_ring)
+	if _world.has_method("palette"):
+		_rig.palette = _world.palette()
+	if _world.has_method("apply_environment"):
+		_world.apply_environment(_rig)
 	add_child(_rig)
-	_ring1 = load("res://scenes/ring1.tscn").instantiate()
-	_ring1.rig = _rig  # inject before it enters the tree (shared rig)
-	add_child(_ring1)
+	_world.build(_rig)
+	_rig.add_world_child(_world)
 
 	# --- Hybrid bindings: 2D bodies drive 3D billboards -----------------------
 	_warrior_sync = WarriorSync.new()
@@ -48,6 +85,15 @@ func _ready() -> void:
 	if GameState.is_last_song():
 		$HUD.show_status("LAST SONG", Color("#C4547A"))
 	_spawn_enemies()
+
+
+# Instantiate the terrain builder for a ring (Node3D with build(rig); rings 2+ also
+# expose palette()/apply_environment(rig)). Unknown rings fall back to Ring 1.
+func _make_ring_world(ring: int) -> Node3D:
+	match ring:
+		2: return Ring2World.new()
+		3: return Ring3World.new()
+		_: return Ring1World.new()
 
 
 func _process(delta: float) -> void:
@@ -69,11 +115,13 @@ func _on_warrior_died() -> void:
 	_end_run()
 	GameState.run_count += 1
 	GameState.grief_reserve = max(GameState.grief_reserve - 1, 0)
+	GameState.reset_ring()  # placeholder progression: death ends the run (back to Ring 1)
 	get_tree().change_scene_to_file("res://scenes/base.tscn")
 
 func _on_warrior_extracted() -> void:
 	_end_run()
 	GameState.extractions += 1
+	GameState.advance_ring()  # placeholder progression: extraction pushes one ring deeper
 	get_tree().change_scene_to_file("res://scenes/base.tscn")
 
 func _on_enemy_died() -> void:
@@ -86,13 +134,7 @@ func _on_run_cleared() -> void:
 
 func _spawn_enemies() -> void:
 	var last_song := GameState.is_last_song()
-	var spawns := [
-		[EnemyScene,        Vector2(80, 50)],
-		[EnemyScene,        Vector2(400, 50)],
-		[EnemyScene,        Vector2(80, 220)],
-		[EnemyFleerScene,   Vector2(400, 220)],
-		[EnemyPhaserScene,  Vector2(240, 40)],
-	]
+	var spawns: Array = SPAWNS.get(GameState.current_ring, SPAWNS[1])
 	for s in spawns:
 		var e := (s[0] as PackedScene).instantiate() as EnemyBase
 		add_child(e)

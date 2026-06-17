@@ -11,16 +11,23 @@
 > transitions main→base→main with a clean rig rebuild) — all deferred "manual sign-off" notes are
 > closed, and every per-phase throwaway harness is **deleted**. One control fix from the
 > playthrough: `extract` was rebound **Q → F** (`project.godot` `[input]` only) so Q/E are free for
-> camera orbit. Pipeline reference: `RENDERING_3D.md`. **Next: Phase 5** (rings 2–5, camera
-> pixel-snap, bounds/aspect tuning, optional warm-effect palette retune).
+> camera orbit. Pipeline reference: `RENDERING_3D.md`. **Phase 5 in progress** — bounds/aspect is
+> done (`PPU = 18` locked; plateau widened 26→28 for x-margin; the aspect clash was benign); a
+> **ring-selection mechanism** is in (`GameState.current_ring` + `main`'s registry of terrain
+> builders, placeholder progression); **Ring 2 (Singing Lands) is done** (measured rose/indigo
+> palette, legibility-gated with both signal hues on-ground) and **Ring 3 (High Canopy) is
+> started** (violet/frost/gold, render-checked, lavender-vs-frost legibility open). Remaining:
+> Ring 3 sign-off + rings 4–5, camera pixel-snap, optional warm-effect palette retune.
 
 ## Start here (fresh session)
 
 **Phases 0–4 and all of Phase 2b are done — the Ring 1 loop plays in 3D and the warrior's full
 visual identity reads** (bob, notation, ability shockwaves, the Hollow chest wound, the hem/shimmer
-overlay). Remaining: **Phase 5** (rings 2–5, camera pixel-snap, bounds/aspect tuning, and the
-optional warm-effect palette retune — the cool palette currently cool-shifts the Hollow ember to
-pink, accepted as-is). See entries below.
+overlay). **Phase 5 is in progress** — bounds/aspect is done (`PPU = 18` locked; plateau widened
+26→28; the aspect clash was benign — see the Phase 5 entry + the resolved sim↔world open
+question). Remaining: rings 2–5, camera pixel-snap, and the optional warm-effect palette retune
+(the cool palette currently cool-shifts the Hollow ember to pink, accepted as-is). See entries
+below.
 
 1. Read `CLAUDE.md` (direction + conventions), then `docs/RENDERING_3D.md` (the proven
    pipeline), then skim the **Phases** section below for what's ✅ DONE and what each
@@ -345,10 +352,82 @@ run-loop signal handlers are **byte-identical** to the 2D build.
   the 3D view when those abilities fire (the reveal/damage *logic* is unaffected — only the VFX
   reads wrong). Converting these ability/effect visuals to 3D is Phase 2b.
 
-### Phase 5 — Remaining rings & polish
+### Phase 5 — Remaining rings & polish — 🚧 IN PROGRESS
 Rings 2–5 as 3D geometry with their measured palettes. Polish: camera pixel-snap to kill
 rotation shimmer, depth-based silhouette outline if forms need separation, dedicated
 isometric character sheets if billboards read wrong at the iso angle.
+
+**Done so far:**
+- **Bounds/aspect — DONE (2026-06-17).** `PPU = 18` locked; the feared aspect clash was
+  benign (the play area nests inside the plateau — see the resolved sim↔world *open question*).
+  Targeted fix: plateau width 26→28 in `ring1_world.gd` for ~1u of x-margin so the warrior
+  doesn't teeter on the lip at the x-extremes. z untouched (already had ~4u slack). Verified
+  windowed via the throwaway `scenes/bounds_capture.tscn` (`-- --capture [--after]`, now
+  deleted) — teleports the warrior to the five reachable extremes and captures the root window;
+  evidence kept in `docs/gen/bounds_*_{before,after}.png`. *(The widened −14 left edge meets the
+  front-left cliff steps + stairs; the after-shots show the cliff silhouette held — verified by
+  silhouette, the warrior wasn't teleported onto that exact corner.)* *(Harness gotcha banked:
+  `var x := load(...).instantiate()` won't type-infer — a parse fail loads the scene with no
+  script and the window idles forever, looking exactly like a hang. Type the var explicitly.
+  Also: a `pgrep -f <scene>.tscn` watchdog matches your own monitor shell — grep `MacOS/Godot`
+  instead.)*
+- **Reusable constraint for rings 2–5 (the reason bounds went first):** PPU=18 + `SIM_ORIGIN`
+  are **universal** (shared across all rings — a per-ring PPU would change the warrior's fixed
+  `pixel_size`/100px/s feel; see `sim_space.gd`). With the shared 480×270 wall box, the
+  warrior's reachable world footprint is **x∈[−13.0, 13.0], z∈[−6.94, 6.94]**. **Every ring's
+  playable terrain must cover at least that — target ±14 × ±8 for ~1u of margin.** Per-ring
+  variation lives in the *terrain geometry + palette*, not the transform.
+- **Ring selection mechanism — DONE (2026-06-17).** `game_state.gd` gained `current_ring`
+  (1..`MAX_RING`=5) with a **placeholder** progression: `advance_ring()` (extraction pushes one
+  ring deeper) / `reset_ring()` (death ends the run → back to Ring 1), wired in
+  `main._on_warrior_extracted` / `_on_warrior_died`. The rule is deliberately minimal —
+  real run-structure design is open; just flagged in code. `main.gd` was refactored from the
+  hardcoded `ring1.tscn` wrapper to a **registry of terrain builders**: `_make_ring_world(ring)`
+  returns `RingNWorld.new()`, main sets `rig.palette = world.palette()` + `world.apply_environment(rig)`
+  **before `add_child(_rig)`** (the rig builds its pipeline lazily on `_ready`/`_ensure_built`, so
+  per-ring config must precede it), then `world.build(rig)` + mount. **Ring 1 takes no override**
+  (its builder has no `palette()`/`apply_environment()`, so the rig uses its baked Ring-1 defaults)
+  — its verified render is provably untouched (regression-checked: `docs/gen/ring1_yaw45.png`).
+  Per-ring enemy spawn tables live in `main.SPAWNS` (sim-space; bounds are universal), not on the
+  builders. Dropping the `ring1.tscn` wrapper also removed a latent **double-orbit** (both
+  `main._process` and `ring1.gd._process` were orbiting); orbit is now single-speed in main.
+  *(`scenes/ring1.tscn` + `scripts/ring1.gd` still run standalone; just no longer main's path.)*
+- **Ring 2 (The Singing Lands) — DONE (2026-06-17).** `scripts/ring2_world.gd` (`Ring2World`):
+  dark indigo backdrop, dense rose/magenta alien-flora clusters, ruined Singer wall + arch, a
+  warm amber **glow shrine** (the one warm accent + an `OmniLight3D`), a far Watcher-outpost
+  silhouette, a rose dirt path; 28×22 plateau (universal footprint). Palette + environment
+  **measured** from `idea/the_singing_lands_concept_1.png`.
+  **The legibility gate was the real work** (advisor-flagged): Ring 2's natural palette IS
+  pink/rose, so the dissonant-pink signal hue (`c4547a`) has no hue separation from terrain. **The
+  fix that passed: desaturate the *walkable* ground to a pale purple-grey stage and push the
+  saturated rose into the *flora* props (peripheral).** This restores the read Ring 1 got for free
+  (desaturated ground → saturated signal hues pop by *saturation*), and the pale stage also lets
+  the dark warrior billboard read. The first pass (saturated rose ground) failed — pink enemy +
+  dark warrior both vanished into the terrain. Verified windowed with **both signal-frequency
+  enemies revealed on Ring 2 ground** at yaw 45 + 135 (`docs/gen/ring2_yaw{45,135}.png`): warrior,
+  dissonant pink, and harmonic lavender all read; rose flora carries the ring identity. Brightest
+  terrain rose capped at `9a5656` (excluded `a9615c` — too near the signal pink, would pull flora
+  highlights onto the dissonant signal).
+- **Ring 3 (The High Canopy) — STARTED (2026-06-17), not signed off.** `scripts/ring3_world.gd`
+  (`Ring3World`): builder + measured palette + environment + one render check
+  (`docs/gen/ring3_yaw45.png`). The concept (`idea/the_high_canopy_concept_1.png`) is **deep
+  violet/indigo with pale frost, dark carved monoliths, and warm GOLD glyph inscriptions — NOT
+  cold blue** (the GDD text says "cold/sparse"; the *art* is violet+gold — measured, not assumed).
+  Geometry: violet plateau, frost-capped monoliths with gold glyph bands, a central gold
+  alignment-array inlay (the carvings), floating sub-plateaus, sparse frost tufts. Reads well;
+  warrior + dissonant pink pop. **Known sign-off blocker:** the pale frost tones sit near the
+  harmonic-lavender signal (`c0a0f0`) — lavender enemies blend into the frost (the Ring-2
+  legibility problem, mirrored). Resolve before calling Ring 3 done (greying/dimming the frost,
+  or the same desaturate-the-stage move). Rings 4–5 remain.
+
+**Remaining:** Ring 3 sign-off (lavender-vs-frost legibility) + rings 4–5 geometry + measured
+palettes (`idea/the_deep_canals_concept_1.png`, `idea/the_still_heart_concept_1.png`); camera
+pixel-snap (lower-leverage — the shimmer is intermittent, only during active Q/E orbit, and
+camera-snap won't fix the always-on billboard crawl); and the conditional "decide after looking"
+polish (depth silhouette outline, warm-effect palette retune, dedicated enemy sheets). *Throwaway
+harness `scenes/ring_capture.tscn` + `scripts/ring_capture.gd` (`-- --ring=N`, sets
+`GameState.current_ring`, freezes + reveals both-frequency enemies, captures root window at yaw
+45/135) is kept for the remaining rings; delete when rings 4–5 are signed off.*
 
 ## Things that DON'T change
 - `game_state.gd` / run-loop logic, tribe/relationship/echo persistence.
@@ -374,11 +453,16 @@ isometric character sheets if billboards read wrong at the iso angle.
   aim_dir_from_screen()`, injected into `warrior.gd` via the `attack_dir_provider` hook.
 - ~~Rig ownership~~ **RESOLVED (Phase 2):** the scene owns the rig and injects it into
   `Ring1` (+ the sync); `Ring1` self-creates only as a standalone fallback.
-- **sim↔world coordinate mapping — partially resolved (Phase 2).** Transform shape settled:
-  `world = Vector3((sim.x-240)/PPU, hover_y, (sim.y-135)/PPU)` (origin = sim centre (240,135),
-  2D y-down → 3D +z, verified numerically). **`PPU = 18` is provisional** (eyeballed between
-  the plateau-width anchor 480/26 ≈ 18.5 and the spike-feel anchor 100/6 ≈ 16.7; the static
-  captures have no distance reference, only "on the plateau" is confirmed). **Still open:**
-  the aspect clash (play area ≈1.78 vs plateau ≈1.18) and real roam bounds — deferred to
-  Phase 4 when `main` supplies the walls; *decide then*: reshape plateau toward 1.78, or
-  constrain the sim play area to the plateau footprint.
+- ~~sim↔world coordinate mapping~~ **RESOLVED (Phase 5, 2026-06-17).** Transform shape (set
+  in Phase 2): `world = Vector3((sim.x-240)/PPU, hover_y, (sim.y-135)/PPU)` (origin = sim
+  centre (240,135), 2D y-down → 3D +z, verified numerically). **`PPU = 18` is now locked.**
+  The "aspect clash" (play area ≈1.78 vs plateau ≈1.18) turned out benign once worked through
+  the real walls + collision box: with PPU=18 the play area *nests inside* the plateau. The
+  480×270 roam box minus the warrior's 6px collision half-width → body centre reaches
+  x=±13.0, z=±6.94 world. Plateau was 26×22 → ±13 (x), ±11 (z): z has ~4u of slack, but x was
+  *exactly* the lip, so the warrior teetered on the edge at the x-extremes (capture evidence:
+  `docs/gen/bounds_corner_*_before.png`). **Resolution chosen: keep PPU=18, nudge the
+  plateau** — widened plateau width 26→28 (`ring1_world.gd`) for ~1u of x-margin; z left as-is
+  (already had slack). Did *not* reshape toward 1.78 or constrain the play area (both change the
+  established feel/silhouette). After capture: `docs/gen/bounds_corner_*_after.png` — warrior
+  grounded with margin, front-left cliff silhouette intact.
