@@ -1,18 +1,8 @@
-[gd_scene load_steps=18 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/warrior.tscn" id="1"]
 [ext_resource type="Script" path="res://scripts/main.gd" id="2"]
-[ext_resource type="Script" path="res://scripts/ground_layer.gd" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/hud.tscn" id="4"]
-[ext_resource type="TileSet" path="res://assets/tiles/ring1/ground.tres" id="5"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/ruin.png" id="6"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/archway.png" id="7"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/bunting.png" id="8"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/wall.png" id="9"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/monolith.png" id="10"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/rubble.png" id="11"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/flora.png" id="12"]
-[ext_resource type="Texture2D" path="res://assets/tiles/ring1/props/shrub.png" id="13"]
 
 [sub_resource type="RectangleShape2D" id="1"]
 size = Vector2(8.0, 290.0)
@@ -27,60 +17,7 @@ size = Vector2(496.0, 8.0)
 size = Vector2(496.0, 8.0)
 
 [node name="Main" type="Node2D"]
-y_sort_enabled = true
 script = ExtResource("2")
-
-[node name="GroundLayer" parent="." type="TileMapLayer"]
-tile_set = ExtResource("5")
-script = ExtResource("3")
-
-[node name="Ruin" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(390, 96)
-offset = Vector2(-80, -160)
-texture = ExtResource("6")
-
-[node name="Archway" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(92, 84)
-offset = Vector2(-56, -112)
-texture = ExtResource("7")
-
-[node name="Bunting" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(240, 60)
-offset = Vector2(-56, -80)
-texture = ExtResource("8")
-
-[node name="Wall" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(432, 216)
-offset = Vector2(-48, -64)
-texture = ExtResource("9")
-
-[node name="Monolith" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(60, 232)
-offset = Vector2(-24, -64)
-texture = ExtResource("10")
-
-[node name="Rubble" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(312, 246)
-offset = Vector2(-32, -48)
-texture = ExtResource("11")
-
-[node name="Flora" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(176, 250)
-offset = Vector2(-24, -48)
-texture = ExtResource("12")
-
-[node name="Shrub" type="Sprite2D" parent="."]
-centered = false
-position = Vector2(440, 128)
-offset = Vector2(-28, -72)
-texture = ExtResource("13")
 
 [node name="Warrior" parent="." instance=ExtResource("1")]
 position = Vector2(240, 135)

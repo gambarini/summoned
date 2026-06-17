@@ -13,11 +13,12 @@ local `fetch_tiles.sh` needed). Two tools, chosen by job:
   only PixelLab tool that produces *seamless repeating* terrain + peering metadata.
 - **Props / set-dressing** → `create_map_object` (transparent-background objects).
 
-`create_tiles_pro` was tried first for the ground (48px, wanting a chunkier feel)
-and **rejected**: it makes discrete bounded tiles, not seamless terrain — multi-
-material calls baked hard seams *inside* tiles, and a uniform single-material call
-in segmentation mode produced empty tiles. Use it for discrete tiles only, never
-for seamless ground. Props are kept on an isometric ("high top-down") camera to
+`create_tiles_pro` makes **discrete bounded tiles**, not corner-blended Wang
+terrain. An early attempt used it for *seamless* ground and was rejected (multi-
+material calls baked hard seams inside tiles; segmentation single-material
+produced empty tiles). The **v3 ground (current)** instead embraces the discrete
+model — a curated, de-rimmed `create_tiles_pro` set scattered by weight — see
+*Ground (v3)* below. Props are kept on an isometric ("high top-down") camera to
 match the GDD concept art; the warrior reads slightly flatter (accepted).
 
 ## Palette (locked — The Pale Reaches)
@@ -35,7 +36,44 @@ higher saturation than natural terrain (built when the world had more warmth).
 
 ## Tilesets
 
-### Ground → Path  (`ground_path.png`)  — v2, current
+### Ground  (`ground_tiles.png`)  — v3, current
+
+Discrete chunky 48px stone tiles from `create_tiles_pro`, the reworked Ring 1
+ground (replaces the v2 Wang set below for the ground; `main.tscn`'s `GroundLayer`
+now points at `ground_tiles.tres`).
+
+- PixelLab tiles_pro id: `fbb0aadd-da35-4b68-a890-419b3b036cb7`
+  (48×48, `square_topdown`, **`top-down` view (0 depth)**, outline mode, seed 0).
+  Reworked from the user's first asset `2c0af574-…` (high top-down + outline),
+  which baked a dark ledge band on every tile.
+- **The "transparent line" fix.** tiles_pro shades each tile as a discrete *lit
+  object*, baking a dark outline/ledge band on its edges; tiled, those bands read
+  as dark grout/"transparent" lines between cells (the original `2c0af574` asset
+  had a thick ledge from its 15%-depth high-top-down view; even flat `top-down`
+  outline mode leaves a ~1–2px rim). Two fixes combined:
+  1. Regenerate at **`top-down`** view (no depth ledge).
+  2. **De-rim** each tile in `scripts/cleanup_ground_tiles.py` — overwrite a dark
+     edge row/col with the pixels just inside it. Verified: residual edge-vs-
+     interior luminance Δ within ±17 on all keepers (was −180+).
+  A `segmentation`-mode variant (`4f7a1977-…`) was also generated and rejected:
+  cleaner vertical seams but a thick checkered ledge band remained on its dirt
+  tiles that de-rim can't remove.
+- **Curation.** 16 raw tiles → 11 keepers. Tiles 3,4,5,6,7 carry a multi-pixel
+  baked border (residual Δ −41…−175) de-rim can't safely strip, and are dropped.
+  Raw set is read-only in `docs/gen/ring1_ground_tiles_pro/`.
+- **Atlas** `ground_tiles.png` is 4×3 @48px (192×144, 11 tiles + 1 empty cell),
+  grouped by material (see `cleanup_ground_tiles.py` `LAYOUT` and
+  `ground_layer.gd`): plain stone `(0,0)(2,0)`, mottled `(3,0)`, pebble
+  `(0,1)(1,1)(2,1)`, flagstone/cobble `(1,0)(3,1)`, dirt path `(0,2)(1,2)`,
+  sediment `(2,2)`.
+- **Painting.** `ground_layer.gd` scatters tiles by weight (`Layout` enum, fixed
+  `field_seed` for a stable field). Default **`STONE_FIELD`** = bare-stone read
+  (≈90% plain, rare mottled/pebble), per the locked "stone-only" direction —
+  flagstone/path/sediment tiles ship in the atlas but are only painted by the
+  opt-in `COURTYARD` layout. Verified in a live 480×270 render: seamless bare
+  stone, no dark/transparent seam lines, palette-cohesive with the props.
+
+### Ground → Path  (`ground_path.png`)  — v2, SUPERSEDED by v3 above (kept for cliff/reference)
 - PixelLab tileset id: `e829f3a7-7f22-4ef3-8264-38a4e72ad6c2`
 - 16 tiles, 32×32 px, high top-down, selective outline / medium shading / **low detail**
 - Corner-based (Wang) autotile: **lower = bare cool grey-blue stone**, **upper = faint worn tan path**
@@ -93,8 +131,21 @@ source of truth. Wired in `main.tscn` as `Sprite2D`s (`centered=false`,
 
 ## Built TileSet resources
 
-`scripts/build_ring1_tilesets.gd` generates the `.tres` from the fetched PNGs +
-metadata. Re-run headless after re-fetching:
+**`ground_tiles.tres`** (v3, current ground) is built by
+`scripts/build_ground_tileset.gd` from the cleaned `ground_tiles.png` — a single
+48px atlas source, one tile per non-empty cell, **no terrain set** (discrete
+scatter). Regenerate after re-fetching:
+
+```
+python3 scripts/cleanup_ground_tiles.py            # de-rim + curate + pack PNG
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --import
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . \
+    --script res://scripts/build_ground_tileset.gd
+```
+
+`scripts/build_ring1_tilesets.gd` still builds the older Wang `ground.tres` +
+`cliff.tres` from the fetched PNGs + metadata (cliff path unchanged). Re-run
+headless after re-fetching those:
 
 ```
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --import
@@ -102,8 +153,9 @@ metadata. Re-run headless after re-fetching:
     --script res://scripts/build_ring1_tilesets.gd
 ```
 
-- **`ground.tres`** — the v2 `ground_path.png` as a **single** atlas source in one
-  corner-match terrain set with two terrains: `stone` (0) and `path` (1)
+- **`ground.tres`** — v2, **superseded by `ground_tiles.tres` and no longer wired
+  into `main.tscn`** (kept for reference). The v2 `ground_path.png` as a **single**
+  atlas source in one corner-match terrain set with two terrains: `stone` (0) and `path` (1)
   (`lower→stone / upper→path`). Single stone image — no competing all-stone tiles.
   Corner mapping is `NW→top-left, NE→top-right, SE→bottom-right, SW→bottom-left`.
   The build script reloads the result and asserts terrain set count = 1, terrains = 2,
@@ -117,8 +169,14 @@ metadata. Re-run headless after re-fetching:
 
 ## Status / next
 
+- [x] **v3 ground — chunky 48px `create_tiles_pro` set** (`fbb0aadd-…`), de-rimmed
+  + curated to 11 tiles → `ground_tiles.png` / `ground_tiles.tres`, scattered by
+  `ground_layer.gd` (default `STONE_FIELD` bare-stone). Fixed the baked dark/
+  "transparent" seam line (top-down regen + de-rim). `main.tscn` repointed.
+  **Confirmed in a live 480×270 render:** seamless bare stone, no seam lines.
+  Supersedes the v2 Wang ground for the ground layer.
 - [x] **Reworked ground** (v2 `e829f3a7-…`, stone→path, muted/low-detail). Verified
-  seamless via 3×3 self-tile. Replaced v1 (`3769b303-…`).
+  seamless via 3×3 self-tile. Replaced v1 (`3769b303-…`). *(now superseded by v3.)*
 - [x] **Props** generated via `create_map_object` (ruin, archway, bunting, wall,
   monolith, rubble, flora, shrub) → `props/`. `flora.png` color-clamped.
 - [x] Rebuilt `ground.tres` (single-stone-source stone/path corner-match set) —

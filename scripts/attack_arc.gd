@@ -27,6 +27,9 @@ var _base_rot: float = 0.0
 var _hit_areas: Array[Area2D] = []
 
 func _ready() -> void:
+	# Self-group so WorldSync mirrors a flat 3D slash for the arc's brief life
+	# (Phase 3 hybrid; collision stays 2D via HitArea). Harmless in pure-2D runs.
+	add_to_group("attack_arcs")
 	var glow_poly  := _build_arc_polygon(INNER_R * 0.3, OUTER_R * 1.45, HALF_ANGLE + 7.0,  STEPS)
 	var core_poly  := _build_arc_polygon(INNER_R,       OUTER_R,        HALF_ANGLE,         STEPS)
 	var inner_poly := _build_arc_polygon(INNER_R * 1.1, OUTER_R * 0.72, HALF_ANGLE - 20.0,  STEPS)

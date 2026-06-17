@@ -1,7 +1,10 @@
 # Summoned — Claude Code Instructions
 
-Godot 4 project. Resolution 480×270. Pixel art — nearest-neighbour filter throughout.  
-Design intent: `../idea/Summoned_GDD.html`.  
+Godot 4 project. **Low-resolution 3D isometric pixel art** — cel-shaded 3D world seen through an orthographic, freely-rotatable camera, rendered at a low internal resolution and palette-snapped so it reads as hand-drawn pixel art. Characters are camera-facing billboards from pixel sprite sheets. Nearest-neighbour filtering throughout — no bilinear anywhere.
+
+> **Direction change (2026-06):** the project pivoted from 2D top-down to low-res 3D isometric. **Migration Phases 0–4 + Phase 2b part 1 are done (2026-06-16): the Ring 1 run loop (`main.tscn`) plays in 3D end-to-end** — `IsoRig` rig + `Ring1World` terrain + warrior/enemy/arc billboards synced from the still-authoritative 2D sim (Option B hybrid), 2D HUD on top; the warrior's core effects (hover bob, notation drift, resonance/burst shockwave rings) read in 3D. Remaining: **Phase 2b part 2** (the Hollow void/ember/pull + hem/glow shader — Hollow is gated on `hollow_stress`, so invisible in normal play) and **Phase 5** (rings 2–5, polish). `base.tscn` stays a 2D diorama by choice. The original spike `scenes/ring1_iso_test.tscn` is the read-only look reference. See `docs/RENDERING_3D.md` (the pipeline) and `docs/MIGRATION_3D.md` (the plan + current status).
+
+Design intent: `../idea/Summoned_GDD.html` (§16 Art Direction reflects the 3D pivot).  
 Character references: `docs/[CHARACTER].md` — see Character Docs below.
 
 ---
@@ -45,17 +48,27 @@ scenes/
   attack_arc.tscn     Warrior attack hitbox/visual
   test.tscn           Dev test scene
 
+  ring1_iso_test.tscn  3D iso rendering spike (reference impl — walled off, not in the game)
+
 scripts/              GDScript (.gd) — one per scene
+  ring1_iso_test.gd    3D iso spike: ortho camera rig, SubViewport pipeline, cel materials, billboard warrior
 assets/
   sprites/
-	warrior_8dir/     8-direction rotation PNGs (64×64)
+	warrior_8dir/     8-direction rotation PNGs (64×64) — used as billboards in 3D
 	notation/         Individual notation glyph PNGs
 	notation_glyphs.png  Composited 128×32 spritesheet
-  shaders/            Canvas item shaders (.gdshader)
+  shaders/
+	cel.gdshader        Spatial cel/toon shader (flat quantised lighting) — 3D surfaces
+	pixel_post.gdshader  Canvas-item post pass (palette snap; optional dither/edge)
+	*.gdshader          Other canvas-item shaders (2D effects)
 docs/
   gen/                Raw AI-generated sheets (read-only, never import)
   WARRIOR.md          Warrior sprite + architecture reference
+  RENDERING_3D.md     Low-res 3D iso pipeline (the proven recipe + gotchas)
+  MIGRATION_3D.md     Plan for moving the live game from 2D to 3D
 ```
+
+**Rendering note:** the 3D pipeline lives entirely inside SubViewports and does **not** depend on `project.godot` window/stretch settings — keep it that way. Spatial (3D) shaders use `shader_type spatial`; canvas-item (2D/post) shaders use `shader_type canvas_item`. `docs/RENDERING_3D.md` is the source of truth for the camera, viewport chain, cel shader, and palette.
 
 ## Sprite Cleanup (when new sheets are generated)
 
@@ -81,6 +94,7 @@ Do not use bilinear or bicubic scaling. Do not add anti-aliasing.
 
 ## Do Not Touch
 
-- `project.godot` — window/render settings are correct, do not modify.
+- `project.godot` — window/render settings are correct, do not modify. The 3D pipeline is self-contained in SubViewports and needs no project-level render changes; if migration ever appears to require one, raise it explicitly rather than editing here.
 - `.godot/` cache directory — let the editor manage this.
 - `docs/gen/` raw sheets — read-only reference, never import directly.
+- `scenes/ring1_iso_test.tscn` / `scripts/ring1_iso_test.gd` — the rendering reference spike. Treat as read-only reference for the pipeline; don't wire it into the game.

@@ -28,13 +28,21 @@ const DIR_NAMES := [
 # --- Render / pipeline ---------------------------------------------------
 ## Internal render resolution (chunky pixel grid). Both SubViewports lock here.
 @export var render_size := Vector2i(320, 180)
-## Fixed colour palette every pixel snaps to. Default = measured Ring 1 ramp.
+## Fixed colour palette every pixel snaps to. Default = measured Ring 1 terrain
+## ramp (greys + warm doorway pinpoint) PLUS two gameplay-signal colours that the
+## combat read depends on: the enemy frequency hues (dissonant pink / harmonic
+## lavender, from `enemy.gd` COLORS). Without them, frequency billboards snap to
+## the nearest grey/warm and the read collapses (see MIGRATION_3D Phase 3). They
+## sit far from every terrain grey, so terrain never snaps to them. Signal hues
+## are gameplay-universal (not ring-specific); other rings should keep them when
+## swapping the terrain ramp. 16 entries = the shader's `palette[16]` ceiling.
 @export var palette: PackedStringArray = PackedStringArray([
 	"2a333f", "36414f", "485462", "4c5a6d",
 	"566375", "5a697d", "616b78", "667383",
 	"6e7a89", "7c8591", "8b95a0",
 	"a8b1ba", "cbd2d3",
 	"c89a5e",
+	"c4547a", "c0a0f0",  # signal: dissonant pink, harmonic lavender
 ])
 
 # --- Camera --------------------------------------------------------------

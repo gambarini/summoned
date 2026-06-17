@@ -1,34 +1,57 @@
 # Migration Plan — 2D Top-Down → Low-Res 3D Isometric
 
-> Status: **Phases 0–2 done** (2026-06-15) — reusable `IsoRig`, Ring 1 3D geometry, and the
-> hybrid warrior *walk* (billboard synced to the 2D body, camera-relative). Still 2D: the
-> warrior's effects (Phase 2b), enemies/combat (Phase 3), and the `main`/HUD/base wiring
-> (Phase 4). Pipeline reference: `RENDERING_3D.md`. Phase 3 (enemies & combat) is next.
+> Status: **Phases 0–4 done + Phase 2b part 1** (2026-06-16) — the Ring 1 run loop plays in
+> low-res 3D end-to-end (`main.tscn` = rig + terrain + synced warrior/enemy/arc billboards, 2D
+> HUD on top, `game_state.gd` unchanged), and the warrior's most-felt effects now read in 3D:
+> ability shockwaves (resonance/burst rings → flat 3D ground rings, the Phase-4 seam fixed),
+> hover bob, and notation drift. Still 2D (deferred): the **Hollow** + hem/glow shader (Phase 2b
+> part 2 — Hollow is gated on `hollow_stress`, invisible in normal play) and the `base` diorama
+> (by choice). **Manual playthrough sign-off done (2026-06-17):** the full
+> run→fight→die→`base`→re-summon loop was played end-to-end windowed in 3D (WASD move, mouse
+> attack, R resonance → 3D ground ring, Q/E + arrows orbit, F extract, real `change_scene_to_file`
+> transitions main→base→main with a clean rig rebuild) — all the deferred "manual sign-off"
+> notes below are now closed, and the three throwaway harnesses (`warrior_iso_test.*`,
+> `ring1_phase3_test.*`, `main_verify.*`) are **deleted**. One control fix from the playthrough:
+> `extract` was rebound **Q → F** (`project.godot` `[input]` only) so Q/E are free for camera
+> orbit without accidentally ending the run. Pipeline reference: `RENDERING_3D.md`. Next:
+> **Phase 2b part 2** (Hollow/shader) or **Phase 5** (rings 2–5 + polish).
 
 ## Start here (fresh session)
 
-**Phases 0–2 are done.** Next up is **Phase 3 (enemies & combat)** — see its entry below.
+**Phases 0–4 + Phase 2b part 1 are done — the Ring 1 loop plays in 3D and the warrior's core
+identity (bob, notation, ability shockwaves) reads.** Remaining: **Phase 2b part 2** (the Hollow
+void/ember/pull + hem/glow shader — Hollow is gated on `hollow_stress`, so it doesn't show in
+normal play) and **Phase 5** (rings 2–5, camera pixel-snap, bounds/aspect tuning). See entries
+below.
 
 1. Read `CLAUDE.md` (direction + conventions), then `docs/RENDERING_3D.md` (the proven
    pipeline), then skim the **Phases** section below for what's ✅ DONE and what each
    delivered file is. The current 3D stack: `scripts/iso_rig.gd` (`IsoRig`, the rig) →
    `scripts/ring1_world.gd` + `scenes/ring1.tscn` (`Ring1` playfield) →
-   `scripts/warrior_sync.gd` (`WarriorSync`, the hybrid billboard).
+   `scripts/sim_space.gd` (`SimSpace`, the shared sim↔world transform) →
+   `scripts/warrior_sync.gd` (`WarriorSync`, the player billboard + mouse aim) →
+   `scripts/world_sync.gd` (`WorldSync`, the enemy/arc billboard manager).
 2. See it running, windowed (headless can't render 3D — see the `headless-test-workflow`
-   memory): the **Phase 2 walk** is
-   `… res://scenes/warrior_iso_test.tscn -- --capture [yaw=NNN] [drive=up]`; the **Ring 1
-   world** is `… res://scenes/ring1.tscn` (interactive, Q/E orbit). The original spike
+   memory): the **real Ring 1 run** is just `… res://scenes/main.tscn` (WASD move, mouse aim,
+   click attack, Q/E + arrow orbit, R resonance, F extract) — this is the live game now, and the
+   full run→fight→die→base→re-summon loop is playthrough-verified. The per-phase throwaway
+   capture harnesses have been deleted (their PNGs remain in `docs/gen/`). The original spike
    `scenes/ring1_iso_test.tscn` is still the read-only look reference.
 3. **Architecture is decided: Option B (hybrid)** — see below. Don't reopen it. Rig
    ownership is also decided (scene owns + injects the rig).
-4. **Two decisions open Phase 3** (in *Open questions*): mouse→world attack aim (the 2D
-   cursor no longer maps to the world — raycast the screen ray onto the 3D ground to set
-   `_attack_dir`), and whether to generalize `WarriorSync` into a sync-manager/registry now
-   that enemies + attack arcs also need syncing.
+4. **Phase 3's two open decisions are now RESOLVED** (see *Open questions* + the Phase 3
+   *Delivered* block): mouse→world aim reuses the proven `camera_relative_dir()` on a
+   screen-space delta (no hand-rolled raycast); `WarriorSync` stays a per-entity sync for the
+   player, and a separate **`WorldSync`** manager group-scans the dynamic many (enemies/arcs).
+   The palette-legibility finding is **resolved**: `IsoRig`'s palette now carries the two
+   frequency-signal hues (dissonant pink `c4547a` / harmonic lavender `c0a0f0`), so the combat
+   read survives the snap and the warrior is no longer confusable with a dissonant enemy.
 5. **Gotcha:** after adding any `class_name`, run `… --headless --import` once before a
    direct scene run, or the global class cache is stale (`Could not find type "X"`).
-6. Throwaway harnesses to delete when their phase is signed off: `scenes/ring1_verify.*`
-   (Phase 1), `scenes/warrior_iso_test.*` (Phase 2). The run-loop logic (`game_state.gd`) is
+6. Throwaway harnesses — **all deleted (2026-06-17)** after the manual playthrough sign-off:
+   `scenes/ring1_verify.*` (Phase 1), `scenes/warrior_iso_test.*` (Phase 2),
+   `scenes/ring1_phase3_test.*` (Phase 3), `scenes/main_verify.*` (Phase 4). Their capture PNGs
+   in `docs/gen/` are kept as verification evidence. The run-loop logic (`game_state.gd`) is
    unchanged throughout.
 
 ## Guiding constraints
@@ -138,25 +161,155 @@ effects→3D conversion is split out as **Phase 2b** below.
 internal `_facing_dir` **and** the mouse-based `_attack_dir` are in that space too. Invisible
 now (2D hidden), but Phase 2b (Hollow facing) and Phase 3 (attack aim) must account for it.
 
-### Phase 2b — Player effects → 3D (deferred from Phase 2)
+### Phase 2b — Player effects → 3D (deferred from Phase 2) — 🚧 PARTIAL (2026-06-16)
 Convert the warrior's effect nodes (notation drift, the Hollow void/ember/pull, hover bob,
 glow/trail) from 2D presentation into 3D nodes/billboards driven by the same `WarriorSync`.
 Currently suppressed (not converted) by the body's `visible = false`.
 *Exit:* the warrior's full visual identity reads in 3D, not just the base billboard.
 
-### Phase 3 — Enemies & combat (hybrid)
+**Delivered (part 1): the three effects that were visible or most felt — ability shockwaves,
+hover bob, notation drift.** All driven by `WarriorSync`; warrior touches stay the established
+provider/flag pattern (no logic change).
+- **Ability shockwaves (resonance/burst) — the visible seam from Phase 4, now gone.** These
+  rings have *no* gameplay role (the reveal/damage loop runs above them), so they're handled by
+  **signal, not group-scan mirror**: `warrior.gd` emits `ground_pulse(center, radius, color)`
+  gated by a `suppress_world_vfx` flag (set by `WarriorSync.setup`; unset → original 2D
+  `Polygon2D`, behaviour unchanged). `WarriorSync._on_ground_pulse` spawns a self-animating flat
+  3D ground ring (annulus) that runs its own scale+alpha tween and frees itself — **no 2D node
+  is ever created, so there's no over-the-view flash and no one-frame race** (the trap in the
+  hide approach). *Snap note:* a translucent filled disc re-blends to grey under the palette
+  snap, so it's a **bright ring held opaque while it expands, fading only late** — reads as a
+  clean ground shockwave (`docs/gen/ring1_phase3_pulse_yaw45.png`).
+- **Hover bob:** independent sin on the billboard's Y in `WarriorSync` (`BOB_SPEED 0.8`,
+  `BOB_AMPLITUDE 0.1` world), gated to IDLE/MOVE via a new `warrior.vfx_hover_active()` accessor
+  (matches the 2D rule — still during attacks/hurt/death). The offset is a member (`_bob_y`) so
+  a future Hollow node rides the *same* bob (the 2D code welds the wound to the chest). Verified:
+  billboard Y traces a clean sinusoid peaking at exactly `HOVER_Y+amp` (2.100).
+- **Notation drift:** the 2D `GPUParticles2D` ported to `GPUParticles3D` — same
+  `ParticleProcessMaterial` shape with px values rescaled to world (÷PPU), glyphs as billboarded
+  particle quads off the 4-frame sheet (`particles_anim_h_frames`), `local_coords=false` so the
+  emitter trails. Reads as pale drifting score-debris around the warrior (snaps to the light
+  palette). *Move-intensity density scaling not ported (constant idle ratio) — minor.*
+- *Verified* via the Phase 3 harness (`-- --capture pulse|bob|trail`) and the real-game
+  composite (`docs/gen/phase4_main_composite_yaw45.png` shows notation around the warrior, no 2D
+  artifacts). The `trail` capture drives the warrior 107px and confirms the debris strings out
+  *behind* the path (`docs/gen/ring1_phase3_trail_yaw45.png`) — validating `local_coords=false`,
+  the one thing an idle frame can't show. The hidden 2D `NotationDrift`/Hollow nodes still exist
+  on the body (Option B source) and run suppressed — harmless; the 2D notation sim is wasted
+  work but left to keep the 2D path intact (gate its `emitting` off if part 2 touches the body).
+- *Manual playthrough sign-off — DONE (2026-06-17):* live key/WASD input in `main` confirmed
+  (movement → debris trail, R resonance → 3D ground ring, mouse-aim attack, Q/E + arrow orbit)
+  across the full run→fight→die→base→re-summon loop. The earlier "integration risk is low" call
+  held.
+
+**Still TODO (part 2):** the **Hollow** (void/ember/pull) — gated on `hollow_stress` (@export
+default 0) so it doesn't show in normal play; its billboard must ride `_bob_y` (slot already
+reserved). And the `warrior_hover.gdshader` **hem/shimmer tint** — a canvas_item shader on the
+2D sprite; re-authoring as a spatial shader on the billboard is low-value polish. Glow/trail
+fold into the same pass.
+
+### Phase 3 — Enemies & combat (hybrid) — ✅ DONE (2026-06-16)
 Enemies (`enemy`, fleer, phaser) and `attack_arc` get the same treatment: 2D bodies and
 `Area2D` hitboxes stay the source of truth; each gets a synced 3D billboard. Combat rules
 (frequency / coherence / echo chains) are presentation-agnostic and stay in the 2D sim.
 *Exit:* the full Ring 1 fight plays in 3D with no combat-logic changes.
 
-### Phase 4 — HUD, base, flow
+**Delivered.** Exit met: enemies + attack arc render as synced 3D billboards, mouse aim is
+camera-relative, **all collision stays 2D and combat logic is untouched.**
+- `scripts/sim_space.gd` (`SimSpace`): the sim↔world transform extracted to one shared spot
+  (was inlined in `WarriorSync`), now with the inverse `to_sim()` the mouse aim needs. Pure
+  static maths; `WarriorSync`, `WorldSync`, and the aim all call it.
+- `scripts/world_sync.gd` (`WorldSync`): the sync **manager** for the spawn/despawn crowd. It
+  **group-scans** `enemies` (lazily makes a billboard per new member, frees billboards where
+  `is_instance_valid()` is false) so spawn/death need no wiring — Phase 4's `main` just adds
+  enemies as before. Enemies have no sprite sheets, so the billboard is a camera-facing flat
+  mesh built from the *same* `Polygon2D` (octagon/diamond/triangle silhouette), tinted from
+  `_visual.color` **every frame** (the colour is the gameplay signal — reveal/amplify/flash).
+  Death-shrink (`body.scale`) + amplify-punch (`visual.scale`) ride along free (both tweens
+  run on the hidden 2D nodes). The attack arc self-groups (`attack_arcs`) and gets a flat
+  ground-plane slash mesh oriented to `_attack_dir`, alpha mirrored from its fade.
+- `scripts/warrior_sync.gd`: added `aim_dir_from_screen()` — undo the display's
+  `KEEP_ASPECT_CENTERED` letterbox (window px → render px), find the warrior in that viewport
+  space via `camera.unproject_position()`, feed the on-screen delta to the **proven**
+  `rig.camera_relative_dir()`. Ortho ⇒ screen direction maps faithfully to ground direction,
+  so no hand-rolled ground raycast. (Sim→world transform moved to `SimSpace`.)
+- `scripts/warrior.gd`: **one touch**, mirroring the Phase 2 `input_provider` pattern — an
+  `attack_dir_provider: Callable` hook in `ATTACK_STARTUP`; unset → the original
+  `get_global_mouse_position()` aim (2D path unchanged by inspection).
+- `scripts/attack_arc.gd`: **one touch** — `add_to_group("attack_arcs")` in `_ready` (harmless
+  in pure-2D runs). Collision stays the 2D `HitArea`.
+- *Verified* windowed via throwaway `scenes/ring1_phase3_test.tscn`. Enemies sync + survive
+  orbit at yaw 45/135 (`docs/gen/ring1_phase3_enemies_yaw*.png`); the arc renders as a
+  directional ground slash (`…_arc_yaw45.png`). **Aim discriminator** (the risky piece): a
+  *fixed* top-centre cursor yields `_attack_dir` (sim space) = `(-0.707,-0.707)` at yaw 45 and
+  `(-0.707,+0.707)` at yaw 135 — a 90° rotation matching the 90° orbit, proving aim is
+  camera-relative (a world-fixed aim would be identical at both). A `combo` capture closes the
+  asymmetric gaps the straight-away tests miss: an **off-axis** cursor gives `aim.x>0` toward
+  the up-right enemy (dot 0.61; slash visually points up-right), and killing an enemy drops the
+  tracked billboard count 5→4 (the **death→reap** path). Letterbox offset is structurally 0
+  here (project `stretch=canvas_items` pins the content viewport to 480×270 and absorbs the
+  OS-window letterbox before the mouse reaches us; 480×270→render 320×180 is aspect-matched) —
+  the offset code is correct/future-proof but never bites, so the only real-cursor unknown is
+  left to manual playtest. Delete `ring1_phase3_test.*` after sign-off.
+- **Legibility fix (done):** the palette post-pass originally only knew the Ring 1 greys + one
+  warm tone, so frequency billboards snapped to it (dissonant pink→warm orange, harmonic
+  purple→grey) — dissonant enemies, the arc, and the warrior all collapsed onto the same
+  orange. Fixed by adding the two gameplay-signal hues to `IsoRig`'s palette (`c4547a` pink,
+  `c0a0f0` lavender — the canonical `enemy.gd` COLORS; 16 entries now = the shader's
+  `palette[16]` ceiling). Verified: dissonant reads pink, harmonic reads lavender, the arc
+  reads pink, the warrior stays neutral, and terrain is untouched (the hues sit far from every
+  grey, so nothing else snaps to them). Signal hues are gameplay-universal — other rings keep
+  them when swapping the terrain ramp.
+- **Still deferred (juice, like Phase 2b):** the fleer's explosion ring is a separate transient
+  2D node and is not yet rendered in 3D. Amplified (orange) still folds to the warm tone — fine
+  (transient "wrong-hit" feedback); add a third signal hue only if it needs to pop more.
+
+### Phase 4 — HUD, base, flow — ✅ DONE (2026-06-16)
 - **HUD** stays 2D: a `CanvasLayer` over the rendered viewport — unaffected by the 3D
   world. Verify it composites above the display TextureRect.
 - **Base** (`base.tscn`): keep as the 2D tribe portrait initially (it's a diorama, not a
   playfield); convert to 3D later only if desired.
 - **`main.tscn`** wires the rig + Ring 1 + warrior + HUD; `game_state.gd` is unchanged.
 *Exit:* run → fight → die → base → re-summon, end-to-end, in 3D for Ring 1.
+
+**Delivered.** `main.tscn` / `main.gd` are now the 3D run scene; `game_state.gd` and the
+run-loop signal handlers are **byte-identical** to the 2D build.
+- `scripts/main.gd`: `_ready` now owns + injects the shared `IsoRig`, mounts `Ring1`, and
+  builds `WarriorSync` + `WorldSync` (the Phase-2/3 bindings) — then the *unchanged* HUD bind,
+  death/extract signal wiring, last-song check, and `_spawn_enemies()`. `_process` adds Q/E
+  camera orbit. The death→base→re-summon handlers are untouched (`change_scene_to_file`).
+- `scenes/main.tscn`: dropped the 2D `TileMapLayer` ground + all prop `Sprite2D`s (the 3D
+  `Ring1World` replaces them). **Kept** the warrior, the HUD `CanvasLayer`, and the boundary
+  `Walls` (the 2D roam bounds — still the 480×270 box; warrior stays ~on the plateau, the
+  aspect/bounds tuning from the sim↔world open question is left for a polish pass).
+- `scripts/warrior_sync.gd`: `setup()` now also wires the live attack aim
+  (`attack_dir_provider` → `aim_dir_from_screen(live cursor)`).
+- `scripts/world_sync.gd`: enemy bodies + arcs are now hidden (`visible = false`) on
+  registration — the harness only sampled the SubViewport, but in the real window the 2D
+  camera is off, so an unhidden 2D `Polygon2D` would draw at raw sim coords *over* the 3D
+  display. Physics/`Area2D`/combat are unaffected.
+- *Verified* windowed via throwaway `scenes/main_verify.tscn`, which instances the real
+  `main.tscn` and captures the **root window** (not the SubViewport): Ring 1 renders in 3D, the
+  HUD (coherence bar / chain / resonance dot) composites above the display, warrior + 5 enemies
+  read as synced frequency-coloured billboards, and **no stray 2D polygons** leak through
+  (`docs/gen/phase4_main_composite_yaw45.png`). The **re-summon rebuild path** is verified too
+  (the real new risk: `main._ready` building a *fresh* `IsoRig` + two SubViewports + materials
+  on a second entry): the `reentry` mode instances `main`, frees it, re-instances, and the
+  second build renders identically clean (`docs/gen/phase4_reentry.png`) — and that run also
+  drove the **live** attack path (`WarriorSync._aim_live` via `get_mouse_position`, which the
+  synthetic-cursor tests bypassed), spawning an arc on the rebuilt rig. `main.tscn` also loads
+  clean as the actual root scene. The death/transition *logic* is byte-identical to the proven
+  2D build; a full combat-driven playthrough is the natural manual sign-off. Delete
+  `main_verify.*` after that. (First-ever run compiles the cel/post shaders — a cold launch can
+  be several seconds; give capture watchdogs headroom.)
+- *Now orphaned by the 3D `main`* (not auto-deleted): `scripts/ground_layer.gd` and the 2D
+  Ring 1 tile/prop assets — still referenced by `scenes/tile_test.tscn`, so left in place.
+- *Deferred (Phase 2b), with one visible seam:* the warrior's death/hurt/summon animations are
+  suppressed with the hidden body (on death the billboard just holds its last pose before the
+  scene swaps — fine). But the **resonance/burst ability rings** are transient 2D `Polygon2D`s
+  the warrior spawns into `Main` at runtime, so they currently flash as flat 2D artifacts over
+  the 3D view when those abilities fire (the reveal/damage *logic* is unaffected — only the VFX
+  reads wrong). Converting these ability/effect visuals to 3D is Phase 2b.
 
 ### Phase 5 — Remaining rings & polish
 Rings 2–5 as 3D geometry with their measured palettes. Polish: camera pixel-snap to kill
@@ -172,12 +325,19 @@ isometric character sheets if billboards read wrong at the iso angle.
 ## Open questions
 - Internal `RENDER_SIZE` for shipping (spike uses 320×180; balances chunk vs. detail).
 - Do enemies/props need dedicated isometric sheets, or do current sheets billboard well
-  enough?
+  enough? **Phase 3 took the cheap path:** enemies have *no* sheets — they billboard as flat
+  `Polygon2D`-silhouette meshes (tinted tokens), and legibility was fixed by adding the
+  frequency hues to the palette (above), not by authoring sheets. Dedicated enemy sheets remain
+  optional polish (Phase 5) if the silhouettes read wrong at the iso angle.
 - Does the base scene stay 2D long-term?
-- Where should the per-frame 2D→3D sync live — a single manager iterating registered
-  entities, or each entity owning its billboard? (Lean: a small sync manager.) **Phase 2
-  started this as a per-entity `WarriorSync`; generalize into a registry/manager in Phase 3
-  when there are multiple entities (enemies) to sync.**
+- ~~Where should the per-frame 2D→3D sync live~~ **RESOLVED (Phase 3):** *both*, by lifetime.
+  The persistent player keeps a per-entity `WarriorSync` (it has unique input/aim duties); the
+  spawn/despawn crowd (enemies, transient arcs) is handled by a single **`WorldSync` manager
+  that group-scans** rather than taking explicit registrations — so death/spawn need no wiring.
+- ~~Mouse→world attack aim~~ **RESOLVED (Phase 3):** no ground raycast — for the ortho camera,
+  unproject the warrior to viewport space, inverse-letterbox the cursor into the same space,
+  and feed the on-screen delta to the proven `camera_relative_dir()`. In `WarriorSync.
+  aim_dir_from_screen()`, injected into `warrior.gd` via the `attack_dir_provider` hook.
 - ~~Rig ownership~~ **RESOLVED (Phase 2):** the scene owns the rig and injects it into
   `Ring1` (+ the sync); `Ring1` self-creates only as a standalone fallback.
 - **sim↔world coordinate mapping — partially resolved (Phase 2).** Transform shape settled:

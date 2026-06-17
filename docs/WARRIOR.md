@@ -5,6 +5,17 @@
 
 ---
 
+## Rendering in 3D (2026-06 pivot)
+
+The project moved to **low-res 3D isometric** rendering (see `RENDERING_3D.md`). The warrior is **not** a 2D node in the game world anymore — he is a **camera-facing billboard** (`Sprite3D`, `billboard = ENABLED`, nearest filter, `shaded = false`) placed in the 3D scene. His existing pixel sheets are reused unchanged.
+
+- **Facing selection:** the 8-direction sheet still drives which frame shows. With a rotatable camera, facing = movement direction *relative to camera yaw* (project the move vector onto the camera's ground right/forward, then pick the nearest of the 8 directions). The spike `scripts/ring1_iso_test.gd` (`_update_warrior`) is the reference for this math.
+- **What survives the pivot:** all sheets, the 8-direction layout, the row→direction mapping below, and the node-based effects philosophy (glow/particles/trail/Lament as Godot nodes, not baked frames) — effects become 3D nodes / billboards instead of 2D.
+- **What's deferred:** a dedicated isometric-angle sheet. Until then the existing top-down-ish sheets are reused as billboards; acceptable for the prototype, revisit if the angle reads wrong.
+- The sprite-sheet layout, animation, and shader-effect sections below remain the source of truth for the *art*; only the placement (2D node → 3D billboard) changes.
+
+---
+
 ## Sprite Strategy — Current Status (May 2026)
 
 ### Architecture: Hand-crafted Pixelrama sprites + Shader effects

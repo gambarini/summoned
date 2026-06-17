@@ -1,53 +1,74 @@
-# Paints a Ring 1 ground field at runtime using the stone→path Wang terrain set
-# in ground.tres. Exercises real corner-match autotiling rather than baking
-# cells, so it doubles as a playtest of the terrain wiring.
+# Paints the Ring 1 ground field at runtime by scattering discrete 48px tiles
+# from ground_tiles.tres (PixelLab create_tiles_pro, de-rimmed — see
+# docs/RING1_TILES.md). These are distinct material tiles, not corner-blended
+# terrain, so we place them cell-by-cell with weighted random selection.
 #
-# Terrains (see docs/RING1_TILES.md): 0 = stone (base), 1 = path.
-# Flora is no longer a ground terrain — it is placed as map-object props
-# (assets/tiles/ring1/props/), so the ground is a single stone→path Wang set.
+# Atlas layout (4x3, see scripts/cleanup_ground_tiles.py LAYOUT):
+#   plain     = (0,0) (2,0)           bare grey-blue stone (primary)
+#   mottled   = (3,0)                 cloudy lighter stone (subtle variation)
+#   pebble    = (0,1) (1,1) (2,1)     grit / gravel accents
+#   flagstone = (1,0) (3,1)           brick / cobble paving (opt-in)
+#   path      = (0,2) (1,2)           trodden dirt strips (opt-in)
+#   sediment  = (2,2)                 wavy sediment (opt-in)
 extends TileMapLayer
 
-const TERRAIN_SET := 0
-const T_STONE := 0
-const T_PATH := 1
+const PLAIN: Array[Vector2i] = [Vector2i(0, 0), Vector2i(2, 0)]
+const MOTTLED: Array[Vector2i] = [Vector2i(3, 0)]
+const PEBBLE: Array[Vector2i] = [Vector2i(0, 1), Vector2i(1, 1), Vector2i(2, 1)]
+const FLAGSTONE: Array[Vector2i] = [Vector2i(1, 0), Vector2i(3, 1)]
+const PATH: Array[Vector2i] = [Vector2i(0, 2), Vector2i(1, 2)]
+const SEDIMENT: Array[Vector2i] = [Vector2i(2, 2)]
 
-# Which overlay terrain to paint over the stone base.
-enum Layout { PLAIN_STONE, PATH_ONLY, DEMO }
+# Bare stone is the locked Pale Reaches direction (docs/RING1_TILES.md): plain
+# stone dominant with only rare mottled/pebble accents — STONE_FIELD (default).
+# STONE_ONLY is pure plain stone. COURTYARD is the busier opt-in mix that also
+# scatters flagstone / path / sediment.
+enum Layout { STONE_ONLY, STONE_FIELD, COURTYARD }
 
-# Field size in cells. 15x9 ~= the 480x270 play area at 32px tiles.
-@export var grid_size: Vector2i = Vector2i(15, 9)
-# Stone-only for now: the path tiles are in the atlas but the generated trail
-# read poorly (harsh outline), so we paint plain stone until the path art is
-# redone. Switch to PATH_ONLY / DEMO once the path tileset is reworked.
-@export var layout: Layout = Layout.PLAIN_STONE
+# 10x6 @ 48px = 480x288, covering the 480x270 play area.
+@export var grid_size: Vector2i = Vector2i(10, 6)
+@export var layout: Layout = Layout.STONE_FIELD
+# Fixed seed keeps the field stable across runs; set 0 to randomize per run.
+@export var field_seed: int = 1337
+
+var _rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
-	_fill(T_STONE, _rect_cells(Vector2i.ZERO, grid_size))
-	if layout == Layout.PATH_ONLY or layout == Layout.DEMO:
-		_fill(T_PATH, _path_cross())
-
-
-# Worn footpath: a cross centred on the spawn cell.
-func _path_cross() -> Array[Vector2i]:
-	var cells: Array[Vector2i] = []
-	var mid := grid_size / 2
+	if field_seed != 0:
+		_rng.seed = field_seed
+	else:
+		_rng.randomize()
+	var source_id := tile_set.get_source_id(0)
 	for y in grid_size.y:
-		cells.append(Vector2i(mid.x, y))
-	for x in grid_size.x:
-		cells.append(Vector2i(x, mid.y))
-	return cells
+		for x in grid_size.x:
+			set_cell(Vector2i(x, y), source_id, _pick())
 
 
-func _fill(terrain: int, cells: Array[Vector2i]) -> void:
-	if cells.is_empty():
-		return
-	set_cells_terrain_connect(cells, TERRAIN_SET, terrain, false)
+# Weighted material pick. Plain stone dominates; accents stay sparse so the field
+# reads as cohesive bare stone rather than a patchwork.
+func _pick() -> Vector2i:
+	var roll := _rng.randf()
+	match layout:
+		Layout.STONE_ONLY:
+			return _one(PLAIN)
+		Layout.COURTYARD:
+			if roll < 0.55:
+				return _one(PLAIN)
+			elif roll < 0.72:
+				return _one(MOTTLED + PEBBLE)
+			elif roll < 0.90:
+				return _one(FLAGSTONE)
+			elif roll < 0.96:
+				return _one(PATH)
+			return _one(SEDIMENT)
+		_:  # STONE_FIELD — bare stone with rare accents
+			if roll < 0.90:
+				return _one(PLAIN)
+			elif roll < 0.96:
+				return _one(MOTTLED)
+			return _one(PEBBLE)
 
 
-func _rect_cells(origin: Vector2i, size: Vector2i) -> Array[Vector2i]:
-	var cells: Array[Vector2i] = []
-	for y in size.y:
-		for x in size.x:
-			cells.append(origin + Vector2i(x, y))
-	return cells
+func _one(pool: Array[Vector2i]) -> Vector2i:
+	return pool[_rng.randi() % pool.size()]

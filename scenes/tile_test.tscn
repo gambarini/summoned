@@ -1,7 +1,7 @@
 [gd_scene load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/ground_layer.gd" id="1"]
-[ext_resource type="TileSet" path="res://assets/tiles/ring1/ground.tres" id="2"]
+[ext_resource type="TileSet" path="res://assets/tiles/ring1/ground_tiles.tres" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/warrior.tscn" id="3"]
 
 [node name="TileTest" type="Node2D"]

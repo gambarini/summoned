@@ -57,6 +57,15 @@ signal chain_changed(value: int)
 signal warrior_died
 signal warrior_extracted
 signal resonance_ready(is_ready: bool)
+## Ability shockwave VFX request (resonance / burst). The 3D iso layer (Phase 2b)
+## listens and spawns a flat ground disc; in the 2D build no one connects and the
+## warrior draws the `Polygon2D` ring itself (see `suppress_world_vfx`).
+signal ground_pulse(center: Vector2, radius: float, color: Color)
+
+# When true (set by the 3D `WarriorSync`), `_do_resonance`/`_do_burst` emit
+# `ground_pulse` instead of spawning the 2D ring — so the ring becomes a 3D disc
+# and never draws a flat 2D `Polygon2D` over the iso view. Unset = original 2D VFX.
+var suppress_world_vfx := false
 
 enum State {
 	IDLE, MOVE,
@@ -225,6 +234,18 @@ func _handle_movement(delta: float) -> void:
 # unset, this is the original screen-space WASD read (2D behaviour unchanged).
 var input_provider: Callable
 
+# Attack aim direction in sim space. The 3D iso layer (Phase 3) injects a provider
+# that raycasts the screen cursor onto the world via the camera (the 2D mouse no
+# longer maps to the world); unset, this is the original screen-space mouse aim
+# (2D behaviour unchanged).
+var attack_dir_provider: Callable
+
+## Presentation hook (read by the 3D `WarriorSync`): true when the warrior should
+## visually hover/bob — IDLE/MOVE only, matching the 2D shader rule. Attacks, hurt,
+## death, and summon sit still.
+func vfx_hover_active() -> bool:
+	return _state in [State.IDLE, State.MOVE]
+
 func _read_dir() -> Vector2:
 	if input_provider.is_valid():
 		return input_provider.call()
@@ -286,7 +307,10 @@ func _enter_state(new: State) -> void:
 			_show_anim()
 			_stop_idle_pulse()
 			$AttackCooldown.start()
-			_attack_dir = (get_global_mouse_position() - global_position).normalized()
+			if attack_dir_provider.is_valid():
+				_attack_dir = attack_dir_provider.call()
+			else:
+				_attack_dir = (get_global_mouse_position() - global_position).normalized()
 			if _attack_dir == Vector2.ZERO:
 				_attack_dir = Vector2.RIGHT
 			_facing_dir = _vector_to_dir(_attack_dir)
@@ -728,6 +752,9 @@ func _do_resonance() -> void:
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		if enemy.global_position.distance_to(global_position) <= RESONANCE_RADIUS:
 			enemy.reveal(1.5)
+	if suppress_world_vfx:
+		ground_pulse.emit(global_position, RESONANCE_RADIUS, Color(0.627, 0.502, 0.878, 0.35))
+		return
 	var ring := Polygon2D.new()
 	ring.color = Color(0.627, 0.502, 0.878, 0.35)
 	ring.polygon = _build_circle(RESONANCE_RADIUS, 20)
@@ -741,15 +768,18 @@ func _do_resonance() -> void:
 func _do_burst() -> void:
 	chain = 0
 	chain_changed.emit(chain)
-	var ring := Polygon2D.new()
-	ring.color = Color(0.627, 0.502, 0.878, 0.6)
-	ring.polygon = _build_circle(BURST_RADIUS, 20)
-	get_parent().add_child(ring)
-	ring.global_position = global_position
-	var tween := create_tween().set_parallel(true)
-	tween.tween_property(ring, "scale", Vector2(1.4, 1.4), 0.3).from(Vector2(0.1, 0.1))
-	tween.tween_property(ring, "modulate:a", 0.0, 0.3).from(0.8)
-	tween.chain().tween_callback(ring.queue_free)
+	if suppress_world_vfx:
+		ground_pulse.emit(global_position, BURST_RADIUS, Color(0.627, 0.502, 0.878, 0.6))
+	else:
+		var ring := Polygon2D.new()
+		ring.color = Color(0.627, 0.502, 0.878, 0.6)
+		ring.polygon = _build_circle(BURST_RADIUS, 20)
+		get_parent().add_child(ring)
+		ring.global_position = global_position
+		var tween := create_tween().set_parallel(true)
+		tween.tween_property(ring, "scale", Vector2(1.4, 1.4), 0.3).from(Vector2(0.1, 0.1))
+		tween.tween_property(ring, "modulate:a", 0.0, 0.3).from(0.8)
+		tween.chain().tween_callback(ring.queue_free)
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		if enemy.global_position.distance_to(global_position) <= BURST_RADIUS:
 			enemy.receive_hit(EnemyScript.Freq.DISSONANT)
