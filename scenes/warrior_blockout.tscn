@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://b8wblockout3dstudy"]
+
+[ext_resource type="Script" path="res://scripts/warrior_blockout.gd" id="1_wblock"]
+
+[node name="WarriorBlockout" type="Node"]
+script = ExtResource("1_wblock")
