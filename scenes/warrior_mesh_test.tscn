@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://c8wmeshtest3dstudy"]
+
+[ext_resource type="Script" path="res://scripts/warrior_mesh_test.gd" id="1_wmesh"]
+
+[node name="WarriorMeshTest" type="Node"]
+script = ExtResource("1_wmesh")

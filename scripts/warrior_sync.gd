@@ -17,25 +17,23 @@ class_name WarriorSync
 
 # --- sim<->world transform ----------------------------------------------
 # The transform itself lives in `SimSpace` (shared with the enemy/arc sync and
-# the mouse aim). Only the warrior-specific hover height stays here.
-const HOVER_Y := 2.0                        # billboard height on the plateau top
+# the mouse aim). Only the warrior-specific heights stay here.
+const FEET_Y := 0.5                         # the mesh's feet sit on the plateau top
+# HOVER_Y is the warrior's visual *centre* — no longer a billboard position, but
+# still the anchor `aim_dir_from_screen` unprojects to find him on screen.
+const HOVER_Y := 2.0
 const MOVE_EPSILON := 8.0                   # px/s; below this, keep last facing
 # Vertical hover bob (ports the warrior's 2D HOVER_SPEED 0.8 / HOVER_PIXELS 1.5;
 # amplitude in world units, a touch over the literal px*pixel_size for iso punch).
 const BOB_SPEED := 0.8
 const BOB_AMPLITUDE := 0.1
 
-const DIR_NAMES := [
-	"north", "north-east", "east", "south-east",
-	"south", "south-west", "west", "north-west",
-]
-
 # --- Notation drift (warrior's "cloak dissolves into notation" identity) --
 # Port of the warrior's 2D GPUParticles2D to 3D: same ParticleProcessMaterial
 # shape, with px values rescaled to world units (÷PPU). World-space (local=false)
 # so the emitter leaves a debris trail as the warrior moves.
 const NOTATION_SHEET := preload("res://assets/sprites/notation_glyphs.png")
-const NOTATION_Y := 1.7            # chest height on the billboard
+const NOTATION_Y := FEET_Y + WarriorMesh.CHEST_Y   # chest socket, world height
 const _PX := 1.0 / SimSpace.PIXELS_PER_UNIT
 
 # --- The Hollow (chest wound) --------------------------------------------
@@ -46,7 +44,7 @@ const _PX := 1.0 / SimSpace.PIXELS_PER_UNIT
 # warrior's sim facing: the wound is painted on the sprite, so it must follow the
 # sheet that's actually shown — which also makes it appear/vanish correctly as the
 # camera orbits. Param arrays re-authored from warrior.gd's `_HOLLOW_*`.
-const HOLLOW_Y := 1.7              # chest height (matches NOTATION_Y / 2D y=4)
+const HOLLOW_Y := FEET_Y + WarriorMesh.CHEST_Y   # chest socket, world height
 const HOLLOW_DISC_PX := 32         # gradient disc resolution, like the 2D sprite
 const HOLLOW_VOID_SCALE := 0.72    # dark recess — kept wider than the ember
 const HOLLOW_GLOW_SCALE := 0.34    # burning core — tight point sunk in the void
@@ -62,26 +60,20 @@ const HOLLOW_DIR_VIS := {
 	"north-east": 0.0, "north": 0.0, "north-west": 0.0,
 }
 
-# --- Hem / shimmer overlay (warrior_hover.gdshader, 3D port) --------------
-# An additive billboard quad layered over the base sprite: amber cloak hem +
-# lavender top shimmer, scaled by movement. Samples the same 8-dir sheet so UVs
-# line up. The base Sprite3D is untouched.
-const HEM_SHADER := preload("res://assets/shaders/warrior_hover_3d.gdshader")
-const BILLBOARD_PIXEL_SIZE := 0.045
-const SHEET_PX := 64
-const HEM_MOVE_RATE := 6.0   # how fast move_intensity eases toward idle/move
-
 # Fixed raw input for programmatic/headless drive (capture harness). The
 # `Vector2.INF` sentinel means "read live Input" (the normal play path).
 var raw_input_override := Vector2.INF
 
 var _rig: IsoRig
 var _warrior: CharacterBody2D
-var _billboard: Sprite3D
-var _dir_textures := {}
+var _mesh: WarriorMesh
+# Sim-space direction the mesh is facing (persisted; updated from velocity while
+# moving, held when idle). The mesh rotates to this world-absolute heading; the
+# camera-relative `_facing` (for the Hollow gate) is derived from it every frame.
+var _face_dir := Vector2(0.0, 1.0)
 var _facing := "south"
 var _bob_phase := 0.0
-var _bob_y := 0.0  # current hover offset; a future Hollow node rides this too
+var _bob_y := 0.0  # current hover offset; the Hollow node rides this too
 var _notation: GPUParticles3D
 var _hollow: Node3D
 var _hollow_void: MeshInstance3D
@@ -90,9 +82,6 @@ var _hollow_ember: MeshInstance3D
 var _hollow_ember_mat: StandardMaterial3D
 var _hollow_pull: GPUParticles3D
 var _hollow_pulse := 0.0
-var _hem: MeshInstance3D
-var _hem_mat: ShaderMaterial
-var _hem_move := 0.0
 
 
 ## Current 8-dir sheet name (for verification / debugging).
@@ -100,9 +89,9 @@ func get_facing() -> String:
 	return _facing
 
 
-## The billboard's world position — output of the sim->world transform.
+## The mesh's world position (feet) — output of the sim->world transform.
 func get_billboard_position() -> Vector3:
-	return _billboard.position
+	return _mesh.position
 
 
 ## Whether the Hollow is currently shown (for verification). Tracks the displayed
@@ -134,19 +123,15 @@ func setup(rig: IsoRig, warrior: CharacterBody2D) -> void:
 	_rig = rig
 	_warrior = warrior
 
-	for d in DIR_NAMES:
-		_dir_textures[d] = load("res://assets/sprites/warrior_8dir/%s.png" % d)
+	# The warrior is now a low-poly cel-shaded mesh (redesign — see
+	# docs/WARRIOR_3D_REDESIGN_STUDY.md), not a billboard. It faces its world-space
+	# movement direction (true 3D) and rotates correctly under the orbiting camera.
+	_mesh = WarriorMesh.new()
+	_mesh.name = "WarriorMesh"
+	rig.add_world_child(_mesh)
+	_mesh.build(rig)
 
-	_billboard = Sprite3D.new()
-	_billboard.name = "WarriorBillboard"
-	_billboard.texture = _dir_textures[_facing]
-	_billboard.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	_billboard.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	_billboard.shaded = false
-	_billboard.pixel_size = BILLBOARD_PIXEL_SIZE
-	rig.add_world_child(_billboard)
-
-	# The billboard is the warrior now: suppress all 2D presentation in one line
+	# The mesh is the warrior now: suppress all 2D presentation in one line
 	# (a hidden root Node2D isn't drawn even when children set visible=true), and
 	# stop the 2D camera fighting the display. Physics/combat are untouched.
 	_warrior.visible = false
@@ -167,8 +152,8 @@ func setup(rig: IsoRig, warrior: CharacterBody2D) -> void:
 
 	_setup_notation()  # the drifting-score-debris identity, as 3D particles
 	_setup_hollow()    # the burning chest wound (gated on facing + stress)
-	_setup_hem()       # amber hem + lavender shimmer overlay (move-driven)
-	_sync_position()  # place the billboard before the first frame
+	_sync_position()  # place the mesh before the first frame
+	_sync_facing()    # orient + seed the camera-relative facing for the gate
 
 
 # --- Ability shockwave VFX (resonance / burst) ---------------------------
@@ -493,33 +478,6 @@ func _build_hollow_pull_ramp() -> GradientTexture1D:
 	return tex
 
 
-# --- Hem / shimmer overlay (3D port) -------------------------------------
-
-func _setup_hem() -> void:
-	_hem = MeshInstance3D.new()
-	_hem.name = "WarriorHem"
-	var quad := QuadMesh.new()
-	quad.size = Vector2.ONE * (SHEET_PX * BILLBOARD_PIXEL_SIZE)
-	_hem_mat = ShaderMaterial.new()
-	_hem_mat.shader = HEM_SHADER
-	_hem_mat.set_shader_parameter("tex", _dir_textures[_facing])
-	_hem_mat.render_priority = 1  # over the base sprite (0), under the Hollow (2+)
-	quad.material = _hem_mat
-	_hem.mesh = quad
-	_rig.add_world_child(_hem)
-
-
-func _update_hem(delta: float) -> void:
-	if _hem == null:
-		return
-	_hem.position = SimSpace.to_world(_warrior.global_position, HOVER_Y + _bob_y)
-	# Ease move_intensity toward 1 while moving, 0 while idle (the 2D shader was
-	# tweened on MOVE enter/exit; here we read the body's velocity directly).
-	var target := 1.0 if _warrior.velocity.length() > MOVE_EPSILON else 0.0
-	_hem_move = move_toward(_hem_move, target, HEM_MOVE_RATE * delta)
-	_hem_mat.set_shader_parameter("move_intensity", _hem_move)
-
-
 # Camera-relative sim-space move direction from raw input (live or overridden).
 func _camera_dir() -> Vector2:
 	var raw := raw_input_override
@@ -543,20 +501,22 @@ func _process(delta: float) -> void:
 	if _notation:
 		_notation.position = SimSpace.to_world(_warrior.global_position, NOTATION_Y)
 	_update_hollow(delta)
-	_update_hem(delta)
 
 
 func _sync_position() -> void:
-	_billboard.position = SimSpace.to_world(_warrior.global_position, HOVER_Y + _bob_y)
+	_mesh.position = SimSpace.to_world(_warrior.global_position, FEET_Y + _bob_y)
 
 
+# The mesh faces its WORLD-absolute movement heading (true 3D). `_facing` — the
+# camera-relative 8-dir name driving the Hollow visibility gate — is re-derived
+# from that heading EVERY frame (not just on movement), so orbiting the camera
+# while idle correctly hides the front-of-chest wound when his back turns to us.
 func _sync_facing() -> void:
 	var v := _warrior.velocity
-	if v.length() < MOVE_EPSILON:
-		return  # keep last facing while idle
-	var dir_name := _rig.facing_name(Vector2(v.x, v.y))
-	if dir_name != "" and dir_name != _facing:
+	if v.length() >= MOVE_EPSILON:
+		_face_dir = Vector2(v.x, v.y).normalized()
+	# +Z is the mesh's front; rotate it onto (face_dir.x, face_dir.y) in world (x,z).
+	_mesh.rotation.y = atan2(_face_dir.x, _face_dir.y)
+	var dir_name := _rig.facing_name(_face_dir)
+	if dir_name != "":
 		_facing = dir_name
-		_billboard.texture = _dir_textures[_facing]
-		if _hem_mat:
-			_hem_mat.set_shader_parameter("tex", _dir_textures[_facing])
