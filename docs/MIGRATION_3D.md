@@ -16,8 +16,15 @@
 > **ring-selection mechanism** is in (`GameState.current_ring` + `main`'s registry of terrain
 > builders, placeholder progression); **Ring 2 (Singing Lands) is done** (measured rose/indigo
 > palette, legibility-gated with both signal hues on-ground) and **Ring 3 (High Canopy) is
-> started** (violet/frost/gold, render-checked, lavender-vs-frost legibility open). Remaining:
-> Ring 3 sign-off + rings 4–5, camera pixel-snap, optional warm-effect palette retune.
+> started** (violet/frost/gold, render-checked) and its lavender-vs-frost legibility is **resolved
+> by the enemy mood pip** — a tiny vibrant (magenta/cyan) dot above each enemy, drawn *unsnapped*
+> in the post-viewport so it pops against any terrain, retiring the per-ring legibility tax
+> wholesale (terrain palettes no longer need to dodge the signal hues). **ALL FIVE RINGS are now
+> built in 3D** (2026-06-18): Ring 4 (Deep Canals — warm Shaper canyon, forge gold, cool drain, rose
+> flora, terraced walls, central mechanism) and Ring 5 (Still Heart — cold near-monochrome grey rose
+> garden "form without warmth", a central violet converging-spire altar). Each ring's palette is
+> measured from its concept art; warrior-vs-ground solved per ring by a lighter walkable stage.
+> Remaining: camera pixel-snap, optional warm-effect palette retune (both lower-leverage polish).
 
 ## Start here (fresh session)
 
@@ -25,7 +32,7 @@
 visual identity reads** (bob, notation, ability shockwaves, the Hollow chest wound, the hem/shimmer
 overlay). **Phase 5 is in progress** — bounds/aspect is done (`PPU = 18` locked; plateau widened
 26→28; the aspect clash was benign — see the Phase 5 entry + the resolved sim↔world open
-question). Remaining: rings 2–5, camera pixel-snap, and the optional warm-effect palette retune
+question). Remaining: camera pixel-snap, and the optional warm-effect palette retune
 (the cool palette currently cool-shifts the Hollow ember to pink, accepted as-is). See entries
 below.
 
@@ -415,19 +422,92 @@ isometric character sheets if billboards read wrong at the iso angle.
   cold blue** (the GDD text says "cold/sparse"; the *art* is violet+gold — measured, not assumed).
   Geometry: violet plateau, frost-capped monoliths with gold glyph bands, a central gold
   alignment-array inlay (the carvings), floating sub-plateaus, sparse frost tufts. Reads well;
-  warrior + dissonant pink pop. **Known sign-off blocker:** the pale frost tones sit near the
-  harmonic-lavender signal (`c0a0f0`) — lavender enemies blend into the frost (the Ring-2
-  legibility problem, mirrored). Resolve before calling Ring 3 done (greying/dimming the frost,
-  or the same desaturate-the-stage move). Rings 4–5 remain.
+  warrior + dissonant pink pop. **The lavender-vs-frost blocker is now RESOLVED by the enemy
+  mood pip (below), not a terrain change** — the pip carries the frequency in clear air above the
+  creature, so lavender reads regardless of the frost. Rings 4–5 remain.
+- **Enemy mood pip — DONE (2026-06-18).** The general fix for the per-ring legibility tax (it was
+  going to recur on every ring): instead of constraining each ring's *terrain* palette away from the
+  two signal hues, each enemy gets a **tiny vibrant dot above its head** marking its frequency
+  (`world_sync.gd`, purely additive — **zero `enemy.gd`/palette/terrain changes**; the enemy body
+  keeps its muted signal colour). Why a dot, not a contour: enemy tokens are only **~6 render px**
+  (measured: octagon ±8 sim-px × 0.385 render-px/sim-px), too small to carry an outline; the dot is
+  a separate element. **The key move — the dot is drawn UNSNAPPED.** It's a 2D `Node2D` overlay
+  added to the rig's **post-viewport, as a sibling drawn *after* the palette-snap `TextureRect`**, so
+  the snap never touches it (`WorldSync.setup` → `rig.get_post_viewport().add_child`; each frame
+  `_update_pips` unprojects a point above each revealed enemy via `rig.get_camera()` to render-space
+  and `_redraw_pips` draws a dark-framed dot there). This gives the pip its **own vibrant palette** —
+  genuinely saturated hues no terrain ramp contains (`PIP_DISSONANT ff2d7e` hot magenta /
+  `PIP_HARMONIC 16e8ff` electric cyan), so it stands out against *any* background or scenery on
+  *every* ring at **zero palette-slot cost**. Still pixel-crisp (drawn at render-res, scaled
+  nearest with the rest of the display) — the one deliberate exception to "everything snaps": a
+  gameplay marker that is *meant* to escape the muted world palette. Verified on rings 1/2/3 at yaw
+  45/135 (`docs/gen/ringN_yaw{45,135}.png`): magenta + cyan pop on Ring 1's pale grey *and* Ring 3's
+  dark violet — the old lavender-vs-frost blend is gone (cyan can't be confused with frost).
+  **Gated to the revealed state:** a dot is queued only while the body is non-neutral
+  (`not is_equal_approx(NEUTRAL_COLOR)`), so idle enemies stay ambiguous — verified neutral via the
+  harness `--noreveal` path (`docs/gen/ring1_yaw45_neutral.png`: base/fleer dot-less, only the
+  always-coloured *phaser* keeps its dot, correct). Colour keys off `enemy.frequency` (public).
+  *History:* tried a 3D billboard (diamond, then notation glyph) first — both went through the snap
+  and the glyph was too big; the unsnapped overlay is what makes the colours reliably vibrant.
+  *Baseline note:* `ring1_yaw45.png` (cited earlier as the Ring-1 regression baseline) now includes
+  the dot; **terrain is untouched by construction** (no terrain code changed).
+- **Ring 4 (The Deep Canals) — DONE (2026-06-18).** `scripts/ring4_world.gd` (`Ring4World`):
+  Shaper-territory canyon — a warm amber/terracotta walkable floor framed by **terraced canyon
+  walls** (Shaper-carved levels stepping up beyond the footprint, with lit amber lips), a central
+  gold **Shaper mechanism** with a forge-glow core (`OmniLight3D`), **forge-light seams** glowing
+  from below in the channels, dense **rose canal flora** on the edges, plank bridges, and one cool
+  **drained canal** as the single cold contrast; 28×22 plateau (universal footprint), seed 44.
+  Palette + environment **measured** from `idea/the_deep_canals_concept_1.png` (legend swatches +
+  pixel scan): warm canyon ramp (`5c2010`/`9e4420`/`d4803a`), forge gold (`f0c060`), cool drain
+  blue-grey (`8890a0`/dark `4a5266`), rose flora reusing the dissonant signal slot (`c4547a` IS the
+  concept's "heated rose canal flora"). Registered in `main._make_ring_world` (`4:`), a `4:` entry
+  added to `main.SPAWNS`, and `HIGHEST_BUILT_RING` bumped 3→4 (`game_state.gd`).
+  **Legibility is no longer gated** (the mood pip carries enemy frequency), so the palette uses the
+  warm canyon hues freely; the one terrain read still owed is **warrior-vs-ground** (advisor-flagged)
+  — solved the Ring 2 way: the WALKABLE floor is a lighter desaturated sandy tan (`a87a52`/`c8a474`,
+  lit-canyon-floor — also on-concept, the lit floors are brighter than the walls) while the saturated
+  amber/forge/rose lives in the walls and peripheral props, so the dark warrior reads. Verified
+  windowed at yaw 45 + 135 (`docs/gen/ring4_yaw{45,135}.png`): warrior reads on the tan floor, both
+  signal pips pop (magenta + cyan), the **drain reads cool and did NOT wash warm** (the warm
+  ambient/key/forge-lights kept modest + the drain has a local cool light; a cool-pixel scan confirms
+  `~405060`/`8890a0` survive the snap), and the frame reads unmistakably as the Deep Canals. Neutral
+  `--noreveal` pass correct (`docs/gen/ring4_yaw{45,135}_neutral.png`: base/fleer dot-less, only the
+  always-coloured phasers keep a cyan pip).
+- **Ring 5 (The Still Heart) — DONE (2026-06-18). All five rings now built in 3D.**
+  `scripts/ring5_world.gd` (`Ring5World`): the cold inversion of Ring 4 — a near-MONOCHROME blue-grey
+  ruined formal ROSE GARDEN ("a very high-quality reproduction of itself, made by something that
+  understood form but not warmth"): a lighter cool-grey walkable plaza with formal **radial paths**,
+  symmetric **hedges**, dense **grey rose foliage**, ruined garden columns framing the edges, faint
+  **pale-white glints** (the distant stag / the warrior's "something left"), and the hero landmark —
+  a central crystalline **violet altar** whose buttress pillars **lean inward and converge into a
+  spire silhouette above head height** (the listening heart), with a glowing periwinkle crystal tip +
+  `OmniLight3D`; 28×22 plateau (universal footprint), seed 55. Palette + environment **measured** from
+  `idea/the_still_heart_concept_1.png` (quantize + pixel scan): a cold grey ramp (`1f242f`→`7b7d83`),
+  a violet altar ramp (`303c60`/`3c486c`/`485478`/`5f67a0` — distinctly darker/duller than the
+  `c0a0f0` harmonic signal, so the altar can't be confused with a harmonic enemy), one pale-white
+  `c4c8d2`. **No warm slot at all** — "form without warmth". Registered in `main._make_ring_world`
+  (`5:`), a `5:` entry added to `main.SPAWNS`, and `HIGHEST_BUILT_RING` bumped 4→5 (= `MAX_RING`;
+  extraction can now reach the final ring). Warrior-vs-ground solved the Ring 2/4 way (lighter plaza
+  `676970`/`7b7d83`; the patches use only mid greys, never the darkest). **Design fix this session:**
+  the first pass put a tall central obelisk at sim-centre where the warrior *spawns*, impaling the
+  billboard — replaced with the converging-buttress spire (open at the warrior's height, more faithful
+  to the concept's radial cathedral) + a low periwinkle glow ring under the player for contrast.
+  Verified windowed at yaw 45 + 135 (`docs/gen/ring5_yaw{45,135}.png`): warrior reads on the glow ring
+  / pale plaza, both pips pop **dramatically** against the monochrome grey (the best pip contrast of
+  any ring — scan: magenta 576px / cyan 432px both yaws), the altar reads as the violet listening
+  heart, and the frame reads unmistakably as the Still Heart. Neutral `--noreveal` pass correct
+  (`docs/gen/ring5_yaw{45,135}_neutral.png`: base/fleer dot-less, only the always-coloured phasers
+  keep pips). *(The Ring-4 "cool element washes warm" risk inverts here and is moot — the ring is
+  uniformly cold by design.)*
 
-**Remaining:** Ring 3 sign-off (lavender-vs-frost legibility) + rings 4–5 geometry + measured
-palettes (`idea/the_deep_canals_concept_1.png`, `idea/the_still_heart_concept_1.png`); camera
+**Remaining:** (all five ring geometries + measured palettes are now DONE) camera
 pixel-snap (lower-leverage — the shimmer is intermittent, only during active Q/E orbit, and
 camera-snap won't fix the always-on billboard crawl); and the conditional "decide after looking"
 polish (depth silhouette outline, warm-effect palette retune, dedicated enemy sheets). *Throwaway
 harness `scenes/ring_capture.tscn` + `scripts/ring_capture.gd` (`-- --ring=N`, sets
 `GameState.current_ring`, freezes + reveals both-frequency enemies, captures root window at yaw
-45/135) is kept for the remaining rings; delete when rings 4–5 are signed off.*
+45/135) has served all five rings and is now deletable (kept for now as the per-ring capture/
+regression tool).*
 
 ## Things that DON'T change
 - `game_state.gd` / run-loop logic, tribe/relationship/echo persistence.

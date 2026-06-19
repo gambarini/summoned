@@ -9,9 +9,12 @@ extends Node
 
 func _ready() -> void:
 	var ring := 2
+	var reveal_freq := true   # --noreveal: leave enemies neutral grey (the default-state check)
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--ring="):
 			ring = int(a.split("=")[1])
+		elif a == "--noreveal":
+			reveal_freq = false
 	GameState.current_ring = ring
 
 	var main: Node = load("res://scenes/main.tscn").instantiate()
@@ -27,20 +30,23 @@ func _ready() -> void:
 		e.set_physics_process(false)
 		e.set_process(false)
 		e.frequency = 0 if i % 2 == 0 else 1  # 0=DISSONANT (pink), 1=HARMONIC (lavender)
-		e.reveal(9999.0)
+		if reveal_freq:
+			e.reveal(9999.0)
+
+	var suffix := "" if reveal_freq else "_neutral"
 
 	# Cold launch compiles the cel/post shaders — give it generous headroom.
 	for _n in range(150):
 		await get_tree().process_frame
 	await RenderingServer.frame_post_draw
-	_capture("res://docs/gen/ring%d_yaw45.png" % ring)
+	_capture("res://docs/gen/ring%d_yaw45%s.png" % [ring, suffix])
 
 	# Orbit 90 deg and recapture to confirm legibility survives camera rotation.
 	main._rig.orbit(90.0)
 	for _n in range(30):
 		await get_tree().process_frame
 	await RenderingServer.frame_post_draw
-	_capture("res://docs/gen/ring%d_yaw135.png" % ring)
+	_capture("res://docs/gen/ring%d_yaw135%s.png" % [ring, suffix])
 
 	get_tree().quit()
 

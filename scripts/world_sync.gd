@@ -24,13 +24,46 @@ const ENEMY_HOVER_Y := 1.0   # mesh centre; sits just above the plateau top (y=0
 const ARC_GROUP := "attack_arcs"
 const ARC_Y := 0.6           # flat on the plateau top (0.5), a hair above to avoid z-fight
 
+# Mood pip: a tiny vibrant dot above each enemy marking its frequency. The enemy
+# token is only ~6 render px and shares hue with same-frequency terrain, so the
+# frequency read can vanish into the ground (Ring 2 rose, Ring 3 frost). The pip
+# carries the signal as a dot in clear air above the creature.
+#
+# The dot is drawn as a 2D overlay INSIDE the post-viewport, *after* the palette
+# snap (a sibling of the snap TextureRect, so the snap never touches it). That
+# gives the pip its own vibrant palette — unsnapped, so genuinely saturated hues
+# that no terrain ramp contains, guaranteeing it stands out against any background
+# or scenery on every ring at *zero* palette-slot cost. The enemy body is
+# unchanged (still its muted signal colour); the pip is a separate marker.
+const PIP_DISSONANT := Color("ff2d7e")  # hot magenta — terrain-absent, pops on everything
+const PIP_HARMONIC := Color("16e8ff")   # electric cyan — terrain-absent, pops on everything
+const PIP_OUTLINE := Color(0.04, 0.04, 0.08, 0.95)  # near-black frame so it pops on light terrain too
+const PIP_RISE_Y := 2.0      # world Y to unproject (above the head) for the dot's screen position
+const PIP_CORE := 2.0        # render px; the vibrant core (kept tiny)
+const PIP_BORDER := 1.0      # render px; dark frame on every side
+# Mirror of enemy.gd's NEUTRAL_COLOR / frequency enum. The pip only shows when
+# there's a frequency to read, so it hides while the body is the hidden/neutral
+# grey and appears on reveal/amplify — otherwise every idle enemy would wear a
+# marker, over-tagging creatures meant to read as ambiguous. The phaser (always
+# coloured) shows its pip continuously for free; base/fleer gate on reveal.
+const NEUTRAL_COLOR := Color(0.533, 0.596, 0.659, 1)
+const FREQ_DISSONANT := 0
+
 var _rig: IsoRig
 var _enemy_meshes := {}       # CharacterBody2D -> MeshInstance3D
 var _arc_meshes := {}         # Node2D (AttackArc) -> MeshInstance3D
+var _pip_overlay: Node2D      # unsnapped dot layer in the post-viewport
+var _pip_draws: Array = []    # [{pos: Vector2, color: Color}] rebuilt each frame
 
 
 func setup(rig: IsoRig) -> void:
 	_rig = rig
+	# A 2D layer on top of the snap TextureRect (added last -> drawn last). Drawing
+	# here escapes the palette snap, so the dots keep their vibrant unsnapped hues.
+	_pip_overlay = Node2D.new()
+	_pip_overlay.name = "PipOverlay"
+	_rig.get_post_viewport().add_child(_pip_overlay)
+	_pip_overlay.draw.connect(_redraw_pips)
 
 
 ## Live enemy-billboard count (for verification of the spawn/reap bookkeeping).
@@ -42,6 +75,7 @@ func enemy_billboard_count() -> int:
 func _process(_delta: float) -> void:
 	_sync_enemies()
 	_sync_arcs()
+	_update_pips()
 
 
 # --- Enemies -------------------------------------------------------------
@@ -148,6 +182,41 @@ func _update_arc_billboard(arc: Node2D, mi: MeshInstance3D) -> void:
 		var col: Color = core.color
 		col.a = core.modulate.a * arc.modulate.a
 		mi.material_override.albedo_color = col
+
+
+# --- Mood pip (unsnapped overlay) ----------------------------------------
+
+# Rebuild the dot list each frame: for every revealed enemy, unproject a point
+# above its head to render-space and queue a vibrant dot there. Hidden bodies
+# (neutral grey) contribute nothing — the gate keeps idle enemies un-tagged.
+func _update_pips() -> void:
+	if _pip_overlay == null:
+		return
+	_pip_draws.clear()
+	var cam := _rig.get_camera()
+	for body in _enemy_meshes.keys():
+		if not is_instance_valid(body):
+			continue
+		var visual := body.get_node_or_null("Visual") as Polygon2D
+		if visual == null or visual.color.is_equal_approx(NEUTRAL_COLOR):
+			continue
+		var world := SimSpace.to_world(body.global_position, PIP_RISE_Y)
+		if cam.is_position_behind(world):
+			continue
+		var freq: int = body.frequency if "frequency" in body else FREQ_DISSONANT
+		var color := PIP_DISSONANT if freq == FREQ_DISSONANT else PIP_HARMONIC
+		_pip_draws.append({"pos": cam.unproject_position(world).round(), "color": color})
+	_pip_overlay.queue_redraw()
+
+
+# Drawn into the post-viewport (render-space px), so coords are pixel-aligned and
+# the dots scale up nearest-neighbour with the rest of the display.
+func _redraw_pips() -> void:
+	for d in _pip_draws:
+		var p: Vector2 = d["pos"]
+		var b := PIP_CORE + PIP_BORDER * 2.0
+		_pip_overlay.draw_rect(Rect2(p.x - b * 0.5, p.y - b * 0.5, b, b), PIP_OUTLINE)
+		_pip_overlay.draw_rect(Rect2(p.x - PIP_CORE * 0.5, p.y - PIP_CORE * 0.5, PIP_CORE, PIP_CORE), d["color"])
 
 
 # --- Polygon -> flat mesh helpers ----------------------------------------

@@ -2,10 +2,10 @@ extends Node
 
 const MAX_GRIEF := 10
 const MAX_RING := 5
-## Highest ring with authored 3D terrain (see main.gd's _make_ring_world). Rings
-## above this fall back to Ring 1's geometry, so progression is capped here until
-## rings 4–5 are built — bump as each ring lands.
-const HIGHEST_BUILT_RING := 3
+## Highest ring with authored 3D terrain (see main.gd's _make_ring_world). All five
+## rings are now built, so this equals MAX_RING and progression is uncapped; it stays
+## a separate constant so any future unbuilt ring can re-cap extraction here.
+const HIGHEST_BUILT_RING := 5
 var run_count: int = 0
 var grief_reserve: int = MAX_GRIEF
 var extractions: int = 0

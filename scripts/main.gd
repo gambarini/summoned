@@ -43,6 +43,23 @@ const SPAWNS := {
 		[EnemyFleerScene,   Vector2(400, 220)],
 		[EnemyScene,        Vector2(240, 40)],
 	],
+	4: [
+		[EnemyScene,        Vector2(90, 60)],
+		[EnemyPhaserScene,  Vector2(390, 60)],
+		[EnemyFleerScene,   Vector2(90, 210)],
+		[EnemyPhaserScene,  Vector2(400, 210)],
+		[EnemyFleerScene,   Vector2(240, 50)],
+		[EnemyScene,        Vector2(240, 230)],
+	],
+	5: [
+		[EnemyPhaserScene,  Vector2(90, 60)],
+		[EnemyPhaserScene,  Vector2(390, 60)],
+		[EnemyFleerScene,   Vector2(90, 210)],
+		[EnemyFleerScene,   Vector2(390, 210)],
+		[EnemyPhaserScene,  Vector2(240, 45)],
+		[EnemyScene,        Vector2(150, 135)],
+		[EnemyScene,        Vector2(330, 135)],
+	],
 }
 
 var _rig: IsoRig
@@ -93,6 +110,8 @@ func _make_ring_world(ring: int) -> Node3D:
 	match ring:
 		2: return Ring2World.new()
 		3: return Ring3World.new()
+		4: return Ring4World.new()
+		5: return Ring5World.new()
 		_: return Ring1World.new()
 
 
