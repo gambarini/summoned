@@ -246,6 +246,12 @@ var attack_dir_provider: Callable
 func vfx_hover_active() -> bool:
 	return _state in [State.IDLE, State.MOVE]
 
+## Presentation hook (read by the 3D `WarriorSync`): the current state's name, for
+## driving the mesh's procedural animation (walk/attack/hurt/...). Decoupled from the
+## private `State` enum so the presentation layer needn't import it.
+func vfx_state() -> String:
+	return State.keys()[_state]
+
 func _read_dir() -> Vector2:
 	if input_provider.is_valid():
 		return input_provider.call()

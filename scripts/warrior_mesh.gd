@@ -12,33 +12,43 @@ class_name WarriorMesh
 ## glowing accents (the stress-gated Hollow ember/pull, notation drift, ground pulses)
 ## stay owned by `WarriorSync`, which floats them at the chest socket / warrior position.
 ##
+## Animation is procedural (no skeleton): the legs, sword-arm, and cape hang off pivot
+## nodes that `WarriorSync` rotates each frame (walk cycle, attack swing, cape sway).
+##
 ## Front faces local +Z; feet at local y=0. The caller positions + rotates the root
 ## (face the movement/aim direction in world — true 3D, not camera-facing).
 
 # Chest socket centre + hem level (local units) — exposed so WarriorSync can anchor the
-# dynamic Hollow and (later) per-ring hem tint to the same spots the body reserves.
+# dynamic Hollow and per-ring hem tint to the same spots the body reserves.
 const CHEST_Y := 2.00
 const CHEST_Z := 0.22       # socket front face, local +Z
 const HEM_Y := 0.71
 const TOTAL_HEIGHT := 2.94   # helm crest top; ~matches the billboard's pixel_size scale
+
+# Animation throws (radians).
+const LEG_SWING := 0.5
+const ARM_RAISE := 2.1       # sword from resting point-down to a forward strike
 
 # --- Palette (snaps to the active ring palette in the post pass) -------------
 const ARMOR_DARK := Color("241a33")   # deep indigo plate -> dark blue-grey
 const ARMOR_MID  := Color("4a4560")   # lit plate / pauldrons -> mid
 const SURCOAT    := Color("2e2440")   # cloak / surcoat
 const VOID_COL   := Color("0d0a1e")   # the chest socket -> darkest
-const EMBER_COL  := Color("c89a5e")   # warm hem (palette-present warm; reserved slot in M4)
+const EMBER_COL  := Color("c89a5e")   # warm hem (palette-present warm; per-ring tint in WarriorSync)
 const EYE_COL    := Color("cbd2d3")   # pale glowing eyes
 # Blade: a MID steel grey, deliberately away from the light end — a pale blade snaps to
 # the harmonic signal hue c0a0f0 (blockout finding §8.4); the warrior must stay neutral.
 const BLADE_COL  := Color("6e7480")
 
 var _rig: IsoRig
+var _leg_l: Node3D
+var _leg_r: Node3D
+var _arm: Node3D       # sword shoulder pivot
+var _cape: Node3D
 
 
 ## Build the body under this node, using `rig` for cel materials. `hem_tint` is the
 ## per-ring warm (or cold, on Still Heart) the burning hem snaps to — see WarriorSync.
-## Idempotent-ish: call once after adding to the tree (geometry needs no _ready).
 func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_rig = rig
 	var armor := rig.solid_material(ARMOR_DARK)
@@ -47,17 +57,22 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	var blade := rig.solid_material(BLADE_COL)
 	var hem := _unshaded(hem_tint)
 
-	# Tattered cape behind the body — a primary read when walking away from camera,
-	# so it's a full cloak panel plus two ragged side tatters, all flared back.
-	_box(Vector3(0.56, 1.74, 0.05), Vector3(0.0, 1.04, -0.22), coat, 0.0, 8.0)    # main cloak
-	_box(Vector3(0.16, 1.34, 0.04), Vector3(-0.31, 0.95, -0.20), coat, 7.0, 9.0)  # left tatter
-	_box(Vector3(0.14, 1.50, 0.04), Vector3(0.31, 1.02, -0.21), coat, -6.0, 7.0)  # right tatter
-	# Legs
-	_box(Vector3(0.20, 0.95, 0.24), Vector3(-0.16, 0.47, 0.04), armor)
-	_box(Vector3(0.20, 0.95, 0.24), Vector3(0.16, 0.47, 0.04), armor)
-	# Surcoat skirt (faceted cone) + burning hem band at its base
+	# Legs on hip pivots (walk cycle swings these)
+	_leg_l = _pivot(Vector3(-0.16, 0.95, 0.04))
+	_box(Vector3(0.20, 0.95, 0.24), Vector3(0.0, -0.48, 0.0), armor, 0.0, 0.0, _leg_l)
+	_leg_r = _pivot(Vector3(0.16, 0.95, 0.04))
+	_box(Vector3(0.20, 0.95, 0.24), Vector3(0.0, -0.48, 0.0), armor, 0.0, 0.0, _leg_r)
+
+	# Surcoat skirt (faceted cone) + burning hem band at its base (static)
 	_cyl(0.26, 0.50, 1.05, Vector3(0.0, 1.18, 0.0), coat)
 	_cyl(0.46, 0.54, 0.22, Vector3(0.0, HEM_Y, 0.0), hem)
+
+	# Tattered cape on a back pivot (sway) — a primary read when walking away.
+	_cape = _pivot(Vector3(0.0, 2.0, -0.20))
+	_box(Vector3(0.56, 1.74, 0.05), Vector3(0.0, -0.96, -0.02), coat, 0.0, 8.0, _cape)
+	_box(Vector3(0.16, 1.34, 0.04), Vector3(-0.31, -1.05, 0.0), coat, 7.0, 9.0, _cape)
+	_box(Vector3(0.14, 1.50, 0.04), Vector3(0.31, -0.98, -0.01), coat, -6.0, 7.0, _cape)
+
 	# Torso / breastplate + chest plate + dark Hollow socket
 	_box(Vector3(0.60, 0.74, 0.40), Vector3(0.0, 1.98, 0.0), armor)
 	_box(Vector3(0.34, 0.48, 0.10), Vector3(0.0, 2.04, 0.20), lit)
@@ -73,16 +88,44 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_box(Vector3(0.28, 0.30, 0.06), Vector3(0.0, 2.70, 0.20), _unshaded(VOID_COL))  # face recess
 	_box(Vector3(0.09, 0.10, 0.04), Vector3(-0.08, 2.72, 0.23), _unshaded(EYE_COL))
 	_box(Vector3(0.09, 0.10, 0.04), Vector3(0.08, 2.72, 0.23), _unshaded(EYE_COL))
-	# Sword: lowered, resting point-down at the right side
-	_box(Vector3(0.10, 1.30, 0.05), Vector3(0.40, 0.78, 0.12), blade)  # blade, tip near feet
-	_box(Vector3(0.32, 0.08, 0.10), Vector3(0.40, 1.50, 0.12), lit)    # crossguard
-	_box(Vector3(0.07, 0.13, 0.07), Vector3(0.40, 1.60, 0.12), armor)  # grip/pommel
-	_box(Vector3(0.16, 0.22, 0.18), Vector3(0.38, 1.44, 0.12), armor)  # gauntlet/hand
+
+	# Sword on a shoulder pivot (attack swings it); resting point-down at the right side.
+	_arm = _pivot(Vector3(0.40, 1.55, 0.12))
+	_box(Vector3(0.10, 1.30, 0.05), Vector3(0.0, -0.77, 0.0), blade, 0.0, 0.0, _arm)   # blade
+	_box(Vector3(0.32, 0.08, 0.10), Vector3(0.0, -0.05, 0.0), lit, 0.0, 0.0, _arm)     # crossguard
+	_box(Vector3(0.07, 0.13, 0.07), Vector3(0.0, 0.05, 0.0), armor, 0.0, 0.0, _arm)    # pommel
+	_box(Vector3(0.16, 0.22, 0.18), Vector3(-0.02, -0.11, 0.0), armor, 0.0, 0.0, _arm) # gauntlet
+
+
+# --- Procedural pose API (driven by WarriorSync) -----------------------------
+
+## Walk cycle: opposite-phase leg swings, scaled by `amount` (0 idle .. 1 moving).
+func set_walk(phase: float, amount: float) -> void:
+	var s := sin(phase) * LEG_SWING * amount
+	if _leg_l: _leg_l.rotation.x = s
+	if _leg_r: _leg_r.rotation.x = -s
+
+
+## Attack swing: `t` 0 (rest) .. 1 (full forward strike). Negative = windup back.
+func set_attack(t: float) -> void:
+	if _arm: _arm.rotation.x = -t * ARM_RAISE
+
+
+## Cape sway: trailing angle in radians (positive flares it back).
+func set_cape(angle: float) -> void:
+	if _cape: _cape.rotation.x = angle
 
 
 # --- Primitive builders ------------------------------------------------------
 
-func _box(size: Vector3, pos: Vector3, mat: Material, roll := 0.0, pitch := 0.0) -> void:
+func _pivot(pos: Vector3) -> Node3D:
+	var n := Node3D.new()
+	n.position = pos
+	add_child(n)
+	return n
+
+
+func _box(size: Vector3, pos: Vector3, mat: Material, roll := 0.0, pitch := 0.0, parent: Node = null) -> void:
 	var mi := MeshInstance3D.new()
 	var b := BoxMesh.new()
 	b.size = size
@@ -90,7 +133,7 @@ func _box(size: Vector3, pos: Vector3, mat: Material, roll := 0.0, pitch := 0.0)
 	mi.material_override = mat
 	mi.position = pos
 	mi.rotation_degrees = Vector3(pitch, 0.0, roll)
-	add_child(mi)
+	(parent if parent else self).add_child(mi)
 
 
 func _cyl(top_r: float, bot_r: float, h: float, pos: Vector3, mat: Material) -> void:

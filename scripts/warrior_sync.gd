@@ -79,6 +79,11 @@ var _face_dir := Vector2(0.0, 1.0)
 var _facing := "south"
 var _bob_phase := 0.0
 var _bob_y := 0.0  # current hover offset; the Hollow node rides this too
+# Procedural animation state (drives the mesh's leg/sword/cape pivots).
+var _walk_phase := 0.0
+var _walk_amt := 0.0
+var _atk := 0.0
+var _recoil := 0.0   # hurt knockback (0..1), eased
 var _notation: GPUParticles3D
 var _hollow: Node3D
 var _hollow_void: MeshInstance3D
@@ -437,13 +442,16 @@ func _make_radial_glow_tex() -> GradientTexture2D:
 	# additive core snaps to that exact warm/cold on every ring — no white centre to
 	# mis-snap to pink on a palette without a pale slot (Ring 2/3/4). A faint pale
 	# pinprick at the very centre only (snaps to the ring's lightest where one exists).
+	# Pure tint, no white core: a bright near-white centre snaps unpredictably (to pink
+	# on palettes without a pale slot, and even over the dark socket on Ring 1's additive
+	# blend). The ember is the per-ring tint throughout, brightest at centre by alpha, so
+	# every pixel lands on that palette-present warm/cold — never the dissonant pink.
 	var t := _ember_tint
 	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.12, 0.45, 0.72, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.5, 0.78, 1.0])
 	grad.colors = PackedColorArray([
-		Color(0.941, 0.910, 0.847, 1.0),   # tiny hot pinprick
-		Color(t.r, t.g, t.b, 0.95),        # tint takes over immediately
-		Color(t.r, t.g, t.b, 0.6),
+		Color(t.r, t.g, t.b, 1.0),
+		Color(t.r, t.g, t.b, 0.7),
 		Color(0.483, 0.306, 0.627, 0.12),  # faint cold rim
 		Color(0.483, 0.306, 0.627, 0.0),
 	])
@@ -501,23 +509,62 @@ func _camera_dir() -> Vector2:
 
 # Visual sync runs after physics, so it reads the body's post-move state.
 func _process(delta: float) -> void:
-	# Hover bob (presentation only): advance + apply in IDLE/MOVE, freeze still
-	# otherwise so attacks/hurt/death sit put — matching the 2D rule.
+	_animate(delta)   # updates _walk_phase/_walk_amt/_atk + the leg/sword/cape pivots
+	# Hover bob, with a stronger step-bounce while walking (the leg swing is hidden
+	# by the surcoat at this scale, so the bounce carries the locomotion read).
 	if _warrior.vfx_hover_active():
-		_bob_phase += BOB_SPEED * delta
-		_bob_y = sin(_bob_phase) * BOB_AMPLITUDE
+		_bob_phase += BOB_SPEED * (1.0 + _walk_amt) * delta
+		_bob_y = sin(_bob_phase) * BOB_AMPLITUDE * (1.0 + _walk_amt * 1.6)
 	else:
 		_bob_y = 0.0
-	_sync_position()
 	_sync_facing()
+	_sync_position()
 	# World-space emitter follows the warrior; emitted glyphs stay put -> trail.
 	if _notation:
 		_notation.position = SimSpace.to_world(_warrior.global_position, NOTATION_Y)
 	_update_hollow(delta)
 
 
+const LUNGE_PX := 7.0    # forward hop on the strike (back on the windup) — reads as a lunge
+const RECOIL_PX := 6.0   # backward jolt on hurt
+
 func _sync_position() -> void:
-	_mesh.position = SimSpace.to_world(_warrior.global_position, FEET_Y + _bob_y)
+	# Attack lunges forward along the facing; hurt jolts backward. (Both in sim px.)
+	var push := _atk * LUNGE_PX - _recoil * RECOIL_PX
+	var sim := _warrior.global_position + _face_dir * push
+	_mesh.position = SimSpace.to_world(sim, FEET_Y + _bob_y)
+
+
+# Procedural animation: walk cycle from velocity, sword swing from the attack states,
+# cape sway from both. No skeleton — these rotate the mesh's leg/arm/cape pivots.
+const WALK_FREQ := 9.0       # rad/s leg cadence at full speed
+const ATTACK_RATE := 14.0    # how fast the sword eases toward its per-state target
+const REF_SPEED := 100.0     # warrior px/s at full move (paces the cadence)
+
+func _animate(delta: float) -> void:
+	var speed := _warrior.velocity.length()
+	if speed > MOVE_EPSILON:
+		_walk_phase += delta * WALK_FREQ * clampf(speed / REF_SPEED, 0.0, 1.4)
+		_walk_amt = move_toward(_walk_amt, 1.0, delta * 6.0)
+	else:
+		_walk_amt = move_toward(_walk_amt, 0.0, delta * 6.0)
+	_mesh.set_walk(_walk_phase, _walk_amt)
+
+	# Sword: windup back on startup, full strike on active, settle through recovery.
+	var s: String = _warrior.vfx_state()
+	var atk_target := 0.0
+	match s:
+		"ATTACK_STARTUP": atk_target = -0.25
+		"ATTACK_ACTIVE": atk_target = 1.0
+		"ATTACK_RECOVERY": atk_target = 0.35
+	_atk = move_toward(_atk, atk_target, delta * ATTACK_RATE)
+	_mesh.set_attack(_atk)
+
+	# Hurt: a snappy backward jolt (applied as a position recoil in _sync_position).
+	_recoil = move_toward(_recoil, 1.0 if s == "HURT" else 0.0, delta * 16.0)
+
+	# Cape trails when moving and flares on the strike lunge.
+	_mesh.set_cape(0.06 + _walk_amt * 0.30 + maxf(_atk, 0.0) * 0.22)
 
 
 # The mesh faces its WORLD-absolute movement heading (true 3D). `_facing` — the

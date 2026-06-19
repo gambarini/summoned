@@ -45,7 +45,22 @@ func _ready() -> void:
 		await RenderingServer.frame_post_draw
 		_capture("res://docs/gen/warrior_mesh_ring%d_face%d.png" % [ring, deg])
 
+	# Pose captures (front facing): prove the leg / sword / cape pivots articulate.
+	mesh.rotation_degrees.y = yaw
+	for pose in [["neutral", 0.0, 0.0, false], ["walk", PI * 0.5, 0.0, true], ["attack", 0.0, 1.0, false]]:
+		mesh.set_walk(pose[1], 1.0 if pose[3] else 0.0)
+		mesh.set_attack(pose[2])
+		mesh.set_cape(0.06 + (0.30 if pose[3] else 0.0) + maxf(pose[2], 0.0) * 0.22)
+		await _settle(8)
+		_capture("res://docs/gen/warrior_mesh_pose_%s.png" % pose[0])
+
 	get_tree().quit()
+
+
+func _settle(frames: int) -> void:
+	for _n in range(frames):
+		await get_tree().process_frame
+	await RenderingServer.frame_post_draw
 
 
 func _make_ring_world(ring: int) -> Node3D:

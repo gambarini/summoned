@@ -51,6 +51,22 @@ func _ready() -> void:
 	print("idle-orbit gate: before=", before, " after=", sync.hollow_shown())
 	_capture("res://docs/gen/warrior_integ_orbit.png")
 
+	# 4) Attack: face camera, trigger, capture during ATTACK_ACTIVE (lunge + sword up).
+	rig.orbit(-180.0)  # back to the start yaw
+	var warrior = main.get_node("Warrior")
+	sync.raw_input_override = Vector2(0.0, 1.0)
+	await _settle(24)
+	sync.raw_input_override = Vector2.ZERO
+	await _settle(6)
+	warrior._try_attack()
+	for _n in range(40):
+		await get_tree().process_frame
+		if warrior.vfx_state() == "ATTACK_ACTIVE":
+			break
+	await _settle(2)
+	print("attack: state=", warrior.vfx_state())
+	_capture("res://docs/gen/warrior_integ_attack.png")
+
 	get_tree().quit()
 
 
