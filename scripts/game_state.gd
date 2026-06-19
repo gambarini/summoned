@@ -23,6 +23,19 @@ func starting_coherence() -> int:
 		return 7
 	return 4
 
+## How whole vs. raw the warrior reforms this summon, from the tribe's grief reserve
+## (0 high/whole .. 3 critical/raw). Mirrors `starting_coherence`'s thresholds and extends
+## them to a 4th bucket: a fully-depleted tribe calls back something at its rawest. Read
+## by the 3D warrior's coherence spectrum (cape tatter / Hollow size / notation density).
+func coherence_tier() -> int:
+	if grief_reserve >= 7:
+		return 0
+	elif grief_reserve >= 4:
+		return 1
+	elif grief_reserve >= 1:
+		return 2
+	return 3
+
 func advance_clock() -> void:
 	clock_ticks = mini(clock_ticks + 1, 10)
 

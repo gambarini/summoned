@@ -40,11 +40,24 @@ const EYE_COL    := Color("cbd2d3")   # pale glowing eyes
 # the harmonic signal hue c0a0f0 (blockout finding §8.4); the warrior must stay neutral.
 const BLADE_COL  := Color("6e7480")
 
+# Cape side-strip rest pose (whole) + how far they splay/droop into a tattered fringe
+# at full rawness (coherence spectrum, concept-1 -> concept-2). The base widens (x-shift
+# + droop), not just the angle, so the tatter is distinct from the animated sway.
+const CAPE_L_BASE := Vector3(-0.31, -1.05, 0.0)
+const CAPE_R_BASE := Vector3(0.31, -0.98, -0.01)
+const CAPE_L_ROLL := 7.0
+const CAPE_R_ROLL := -6.0
+const CAPE_SPLAY_DEG := 32.0   # extra outward roll at full raw (fans the fringe)
+const CAPE_SPLAY_X := 0.24     # extra outward shift — widens the silhouette base
+const CAPE_DROOP_Y := 0.22     # side strips sag lower as he frays
+
 var _rig: IsoRig
 var _leg_l: Node3D
 var _leg_r: Node3D
 var _arm: Node3D       # sword shoulder pivot
 var _cape: Node3D
+var _cape_l: MeshInstance3D
+var _cape_r: MeshInstance3D
 
 
 ## Build the body under this node, using `rig` for cel materials. `hem_tint` is the
@@ -67,11 +80,13 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_cyl(0.26, 0.50, 1.05, Vector3(0.0, 1.18, 0.0), coat)
 	_cyl(0.46, 0.54, 0.22, Vector3(0.0, HEM_Y, 0.0), hem)
 
-	# Tattered cape on a back pivot (sway) — a primary read when walking away.
+	# Tattered cape on a back pivot (sway) — a primary read when walking away. The two
+	# side strips are captured so set_coherence() can splay/droop them: whole at high
+	# coherence, fanned into a ragged fringe as the tribe's despair reforms him rawer.
 	_cape = _pivot(Vector3(0.0, 2.0, -0.20))
 	_box(Vector3(0.56, 1.74, 0.05), Vector3(0.0, -0.96, -0.02), coat, 0.0, 8.0, _cape)
-	_box(Vector3(0.16, 1.34, 0.04), Vector3(-0.31, -1.05, 0.0), coat, 7.0, 9.0, _cape)
-	_box(Vector3(0.14, 1.50, 0.04), Vector3(0.31, -0.98, -0.01), coat, -6.0, 7.0, _cape)
+	_cape_l = _box(Vector3(0.16, 1.34, 0.04), CAPE_L_BASE, coat, CAPE_L_ROLL, 9.0, _cape)
+	_cape_r = _box(Vector3(0.14, 1.50, 0.04), CAPE_R_BASE, coat, CAPE_R_ROLL, 7.0, _cape)
 
 	# Torso / breastplate + chest plate + dark Hollow socket
 	_box(Vector3(0.60, 0.74, 0.40), Vector3(0.0, 1.98, 0.0), armor)
@@ -116,6 +131,23 @@ func set_cape(angle: float) -> void:
 	if _cape: _cape.rotation.x = angle
 
 
+## Coherence-spectrum tatter: `raw` 0 (whole / concept-1) .. 1 (raw / concept-2). Fans
+## the two side cape strips outward and droops them so the silhouette frays as the tribe
+## reforms him from deeper despair. Re-poses the strips within the sway pivot, so it
+## composes cleanly with set_cape's per-frame sway (which rotates the parent pivot).
+func set_coherence(raw: float) -> void:
+	raw = clampf(raw, 0.0, 1.0)
+	# Roll deltas tilt each strip's BASE outward (negative-z splays the left strip's
+	# bottom toward -x, positive-z the right toward +x), reinforcing the x-shift so the
+	# silhouette base widens into a fringe rather than the angle merely cancelling it.
+	if _cape_l:
+		_cape_l.position = CAPE_L_BASE + Vector3(-CAPE_SPLAY_X * raw, -CAPE_DROOP_Y * raw, 0.0)
+		_cape_l.rotation_degrees.z = CAPE_L_ROLL - CAPE_SPLAY_DEG * raw
+	if _cape_r:
+		_cape_r.position = CAPE_R_BASE + Vector3(CAPE_SPLAY_X * raw, -CAPE_DROOP_Y * raw, 0.0)
+		_cape_r.rotation_degrees.z = CAPE_R_ROLL + CAPE_SPLAY_DEG * raw
+
+
 ## Assembled fraction: 1 = whole (idle), 0 = collapsed to nothing. Death plays this
 ## 1->0 (crumple + sink), summon plays it 0->1 (rise + assemble), so the endpoints are
 ## the idle pose for free. Feet stay planted (children all have local y>=0), so the
@@ -142,7 +174,7 @@ func _pivot(pos: Vector3) -> Node3D:
 	return n
 
 
-func _box(size: Vector3, pos: Vector3, mat: Material, roll := 0.0, pitch := 0.0, parent: Node = null) -> void:
+func _box(size: Vector3, pos: Vector3, mat: Material, roll := 0.0, pitch := 0.0, parent: Node = null) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var b := BoxMesh.new()
 	b.size = size
@@ -151,6 +183,7 @@ func _box(size: Vector3, pos: Vector3, mat: Material, roll := 0.0, pitch := 0.0,
 	mi.position = pos
 	mi.rotation_degrees = Vector3(pitch, 0.0, roll)
 	(parent if parent else self).add_child(mi)
+	return mi
 
 
 func _cyl(top_r: float, bot_r: float, h: float, pos: Vector3, mat: Material) -> void:

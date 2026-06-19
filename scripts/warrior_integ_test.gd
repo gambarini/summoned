@@ -23,6 +23,16 @@ func _ready() -> void:
 
 	var sync = main._warrior_sync
 	var rig = main._rig
+	var warrior = main.get_node("Warrior")
+
+	# Grief -> coherence-tier wiring (main.gd at summon, GDD §03): confirm the warrior was
+	# reformed at the tier its grief reserve implies, and dump the full mapping.
+	print("wired tier @ grief=", GameState.grief_reserve, " -> warrior.tier=", warrior.tribe_coherence_tier)
+	var _g0: int = GameState.grief_reserve
+	for g in [10, 6, 3, 0]:
+		GameState.grief_reserve = g
+		print("  grief=", g, " -> coherence_tier=", GameState.coherence_tier())
+	GameState.grief_reserve = _g0
 
 	for _n in range(150):  # cold shader compile headroom
 		await get_tree().process_frame
@@ -53,7 +63,6 @@ func _ready() -> void:
 
 	# 4) Attack: face camera, trigger, capture during ATTACK_ACTIVE (lunge + sword up).
 	rig.orbit(-180.0)  # back to the start yaw
-	var warrior = main.get_node("Warrior")
 	sync.raw_input_override = Vector2(0.0, 1.0)
 	await _settle(24)
 	sync.raw_input_override = Vector2.ZERO
@@ -67,7 +76,36 @@ func _ready() -> void:
 	print("attack: state=", warrior.vfx_state())
 	_capture("res://docs/gen/warrior_integ_attack.png")
 
-	# 5) Summon-assemble: face camera, re-enter SUMMONING, capture across the 2.5s arc
+	# 5) Coherence spectrum: the same warrior reformed at high (whole, concept-1) vs
+	#    critical (raw, concept-2) tribe coherence — denser notation, a wider Hollow, a
+	#    more splayed/tattered cape. Front shows Hollow + notation; back shows the cape.
+	for tier in [0, 3]:
+		warrior.tribe_coherence_tier = tier
+		sync.raw_input_override = Vector2(0.0, 1.0)   # toward camera (Hollow visible)
+		await _settle(24)
+		sync.raw_input_override = Vector2.ZERO
+		await _settle(80)   # let the notation field repopulate to the new density
+		print("coherence tier=", tier, " notation_ratio=", "%.2f" % sync.notation_ratio())
+		_capture("res://docs/gen/warrior_integ_coh%d_front.png" % tier)
+		sync.raw_input_override = Vector2(0.0, -1.0)  # away (cape toward camera)
+		await _settle(28)
+		sync.raw_input_override = Vector2.ZERO
+		await _settle(12)
+		_capture("res://docs/gen/warrior_integ_coh%d_back.png" % tier)
+	# Extreme: raw coherence AND max momentary stress — the Hollow at its widest. Confirm
+	# the wound still reads as a wound on the breastplate, not an engulfing disc.
+	warrior.tribe_coherence_tier = 3
+	warrior.hollow_stress = 3
+	sync.raw_input_override = Vector2(0.0, 1.0)
+	await _settle(24)
+	sync.raw_input_override = Vector2.ZERO
+	await _settle(20)
+	print("extreme: tier=3 stress=3")
+	_capture("res://docs/gen/warrior_integ_coh3_stress3.png")
+	warrior.hollow_stress = 0
+	warrior.tribe_coherence_tier = 0   # reset before the summon/death captures
+
+	# 6) Summon-assemble: face camera, re-enter SUMMONING, capture across the 2.5s arc
 	#    (rise + assemble from nothing, final pose = idle).
 	sync.raw_input_override = Vector2(0.0, 1.0)
 	await _settle(20)
@@ -87,7 +125,7 @@ func _ready() -> void:
 			break
 	print("post-summon: state=", warrior.vfx_state())
 
-	# 6) Death-collapse: kill him (coherence -> 0 -> DYING) and capture the crumple +
+	# 7) Death-collapse: kill him (coherence -> 0 -> DYING) and capture the crumple +
 	#    sink + notation disperse across the 2.5s arc. DYING is terminal (no re-summon
 	#    after), so this must come last.
 	warrior.take_damage(9999)

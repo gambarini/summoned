@@ -94,6 +94,10 @@ func _ready() -> void:
 	var ember_tint := WarriorSync.EMBER_TINT_DEFAULT
 	if _world.has_method("ember_tint"):
 		ember_tint = _world.ember_tint()
+	# The tribe reforms him whole or raw from its current grief reserve (GDD §03): this
+	# drives the warrior's coherence spectrum (cape tatter / Hollow size / notation
+	# density). Set at summon, held all run — re-derived each run as grief shifts.
+	$Warrior.tribe_coherence_tier = GameState.coherence_tier()
 	_warrior_sync.setup(_rig, $Warrior, ember_tint)
 
 	_world_sync = WorldSync.new()

@@ -114,6 +114,20 @@ func form_amount() -> float:
 	return _form
 
 
+# Coherence (tribe despair) spectrum, read live from the warrior. tier: 0 whole .. 3 raw.
+func _coherence_tier() -> int:
+	return clampi(_warrior.tribe_coherence_tier, 0, 3)
+
+# Normalised 0 (whole / concept-1) .. 1 (raw / concept-2) for the continuous drives.
+func _coherence_raw() -> float:
+	return _coherence_tier() / 3.0
+
+
+## Current notation emission ratio (for verification): rises with rawness.
+func notation_ratio() -> float:
+	return _notation.amount_ratio if _notation else 0.0
+
+
 ## The mesh's world position (feet) — output of the sim->world transform.
 func get_billboard_position() -> Vector3:
 	return _mesh.position
@@ -449,7 +463,9 @@ func _update_hollow(delta: float) -> void:
 	var shown := f > 0.0 and _form_eased > 0.04
 	_hollow.visible = shown
 	if shown:
-		var fs := _form_eased
+		# Form-scale glues the wound to the collapsing body; coherence widens it (the
+		# Hollow gapes at low coherence — concept-2) on top of the momentary stress.
+		var fs := _form_eased * (1.0 + HOLLOW_COHERENCE_GAIN * _coherence_raw())
 		_hollow_void.scale = Vector3.ONE * (HOLLOW_VOID_SCALE * HOLLOW_RADIUS[s] * fs)
 		_hollow_ember.scale = Vector3.ONE * (HOLLOW_GLOW_SCALE * HOLLOW_RADIUS[s] * fs)
 		# Void alpha = facing factor (fades the recess on side facings, like 2D).
@@ -578,8 +594,13 @@ const FORM_SINK_DEPTH := 0.6   # how far the heap settles below the feet at full
 # Notation disperse on death: while the chest is still up, throw a full cloud of
 # score-debris (the song scattering); once he's crumpled past this, stop emitting so the
 # world-space glyphs hang and fade where they were, not as a fountain from underground.
-const NOTATION_BASE_RATIO := 0.32   # idle emission (the setup default)
 const NOTATION_DISPERSE_UNTIL := 0.5  # _form_eased below which death emission cuts off
+# Coherence spectrum (whole<->raw, concept-1<->concept-2), driven by the warrior's
+# `tribe_coherence_tier` (0 high .. 3 critical). Rawer = denser score-debris + a wider
+# Hollow + a more tattered cape (the cape splay lives on the mesh). The 2D build's
+# `_NOTATION_TIER_SCALE` is widened here so the density delta reads at iso scale.
+const NOTATION_RATIO_BY_TIER := [0.30, 0.45, 0.65, 0.85]
+const HOLLOW_COHERENCE_GAIN := 0.30   # Hollow radius x(1 .. 1.30) from whole -> raw
 
 func _animate(delta: float) -> void:
 	var speed := _warrior.velocity.length()
@@ -605,6 +626,9 @@ func _animate(delta: float) -> void:
 
 	# Cape trails when moving and flares on the strike lunge.
 	_mesh.set_cape(0.06 + _walk_amt * 0.30 + maxf(_atk, 0.0) * 0.22)
+	# Coherence tatter (per-frame so a mid-run tier change re-poses the cape, not just
+	# at summon) — composes with the sway above (that rotates the parent pivot).
+	_mesh.set_coherence(_coherence_raw())
 
 	_animate_form(s, delta)
 
@@ -635,7 +659,8 @@ func _update_notation_emission(s: String) -> void:
 		_notation.amount_ratio = 1.0
 		_notation.emitting = dispersing
 	else:
-		_notation.amount_ratio = NOTATION_BASE_RATIO
+		# Density rises with rawness (low coherence = more shredded score).
+		_notation.amount_ratio = NOTATION_RATIO_BY_TIER[_coherence_tier()]
 		_notation.emitting = true
 
 
