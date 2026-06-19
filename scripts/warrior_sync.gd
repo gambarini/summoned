@@ -64,6 +64,11 @@ const HOLLOW_DIR_VIS := {
 # `Vector2.INF` sentinel means "read live Input" (the normal play path).
 var raw_input_override := Vector2.INF
 
+# Per-ring warm the Hollow ember + hem snap to (the world recolors his fire):
+# amber by default, the ring's own warm on 2/3/4, cold pale-white on Still Heart.
+const EMBER_TINT_DEFAULT := Color("d4803a")
+var _ember_tint := EMBER_TINT_DEFAULT
+
 var _rig: IsoRig
 var _warrior: CharacterBody2D
 var _mesh: WarriorMesh
@@ -119,9 +124,10 @@ func aim_dir_from_screen(screen_pos: Vector2) -> Vector2:
 	return _rig.camera_relative_dir(vp_pos - warrior_vp)
 
 
-func setup(rig: IsoRig, warrior: CharacterBody2D) -> void:
+func setup(rig: IsoRig, warrior: CharacterBody2D, ember_tint := EMBER_TINT_DEFAULT) -> void:
 	_rig = rig
 	_warrior = warrior
+	_ember_tint = ember_tint
 
 	# The warrior is now a low-poly cel-shaded mesh (redesign — see
 	# docs/WARRIOR_3D_REDESIGN_STUDY.md), not a billboard. It faces its world-space
@@ -129,7 +135,7 @@ func setup(rig: IsoRig, warrior: CharacterBody2D) -> void:
 	_mesh = WarriorMesh.new()
 	_mesh.name = "WarriorMesh"
 	rig.add_world_child(_mesh)
-	_mesh.build(rig)
+	_mesh.build(rig, ember_tint)
 
 	# The mesh is the warrior now: suppress all 2D presentation in one line
 	# (a hidden root Node2D isn't drawn even when children set visible=true), and
@@ -422,16 +428,23 @@ func _update_hollow(delta: float) -> void:
 	_hollow_pull.emitting = shown and HOLLOW_INWARD[s] > 0.0
 
 
-# Ember core: hot #F0E8D8 center → warm #D4803A → faint cold #7B4EA0 rim. Tight
-# falloff so the bright part stays inside the void, leaving the dark recess gap.
+# Ember core: hot #F0E8D8 center → the per-ring warm (`_ember_tint`) → faint cold
+# #7B4EA0 rim. Tight falloff so the bright part stays inside the void, leaving the
+# dark recess gap. The tint is chosen per ring to snap cleanly to that ring's palette
+# (amber/gold on warm rings; cold pale-white on Still Heart) — no more pink ember.
 func _make_radial_glow_tex() -> GradientTexture2D:
+	# Tint-dominant: the ember is mostly `_ember_tint` (a palette-present hue), so the
+	# additive core snaps to that exact warm/cold on every ring — no white centre to
+	# mis-snap to pink on a palette without a pale slot (Ring 2/3/4). A faint pale
+	# pinprick at the very centre only (snaps to the ring's lightest where one exists).
+	var t := _ember_tint
 	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.36, 0.62, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.12, 0.45, 0.72, 1.0])
 	grad.colors = PackedColorArray([
-		Color(0.941, 0.910, 0.847, 1.0),
-		Color(0.941, 0.910, 0.847, 0.9),
-		Color(0.831, 0.502, 0.227, 0.45),
-		Color(0.483, 0.306, 0.627, 0.12),
+		Color(0.941, 0.910, 0.847, 1.0),   # tiny hot pinprick
+		Color(t.r, t.g, t.b, 0.95),        # tint takes over immediately
+		Color(t.r, t.g, t.b, 0.6),
+		Color(0.483, 0.306, 0.627, 0.12),  # faint cold rim
 		Color(0.483, 0.306, 0.627, 0.0),
 	])
 	return _radial_tex(grad)

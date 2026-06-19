@@ -89,7 +89,12 @@ func _ready() -> void:
 	# --- Hybrid bindings: 2D bodies drive 3D billboards -----------------------
 	_warrior_sync = WarriorSync.new()
 	add_child(_warrior_sync)
-	_warrior_sync.setup(_rig, $Warrior)
+	# The world recolors the warrior's fire: each ring tints his ember/hem to a
+	# palette-present warm (cold pale-white on Still Heart) so it never snaps to pink.
+	var ember_tint := WarriorSync.EMBER_TINT_DEFAULT
+	if _world.has_method("ember_tint"):
+		ember_tint = _world.ember_tint()
+	_warrior_sync.setup(_rig, $Warrior, ember_tint)
 
 	_world_sync = WorldSync.new()
 	add_child(_world_sync)

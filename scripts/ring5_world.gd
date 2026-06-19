@@ -64,6 +64,13 @@ func palette() -> PackedStringArray:
 	])
 
 
+## Form without warmth: the Still Heart has no warm slot, so the warrior's fire goes
+## COLD here — his ember/hem read as a pale-white glint, the "He has something left"
+## cold star from the concept, instead of snapping to the dissonant-pink signal.
+func ember_tint() -> Color:
+	return Color("c4c8d2")
+
+
 ## Reconfigure the rig for the Still Heart: a cold, colourless twilight — dim cool
 ## ambient, a cold blue-grey key, grey haze. "Form but not warmth": no warm slot at all
 ## (the opposite of Ring 4). Call BEFORE the rig enters the tree (it builds on _ready).

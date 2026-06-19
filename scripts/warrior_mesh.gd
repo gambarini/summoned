@@ -36,15 +36,16 @@ const BLADE_COL  := Color("6e7480")
 var _rig: IsoRig
 
 
-## Build the body under this node, using `rig` for cel materials. Idempotent-ish:
-## call once after adding to the tree (or before — geometry needs no _ready).
-func build(rig: IsoRig) -> void:
+## Build the body under this node, using `rig` for cel materials. `hem_tint` is the
+## per-ring warm (or cold, on Still Heart) the burning hem snaps to — see WarriorSync.
+## Idempotent-ish: call once after adding to the tree (geometry needs no _ready).
+func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_rig = rig
 	var armor := rig.solid_material(ARMOR_DARK)
 	var lit := rig.solid_material(ARMOR_MID)
 	var coat := rig.solid_material(SURCOAT)
 	var blade := rig.solid_material(BLADE_COL)
-	var hem := _unshaded(EMBER_COL)
+	var hem := _unshaded(hem_tint)
 
 	# Tattered cape behind the body — a primary read when walking away from camera,
 	# so it's a full cloak panel plus two ragged side tatters, all flared back.

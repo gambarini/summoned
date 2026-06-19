@@ -46,6 +46,12 @@ func palette() -> PackedStringArray:
 	])
 
 
+## The warrior's ember/hem snap to the Canopy's gold glyph-light — faithful to the
+## "THE SUMMONED WARRIOR" portrait's vertical gold ember-seam.
+func ember_tint() -> Color:
+	return Color("c9a44e")
+
+
 func apply_environment(rig: IsoRig) -> void:
 	rig.bg_color = Color("1b1a3e")        # deep violet sky
 	rig.fog_color = COL_FOG               # violet aerial haze

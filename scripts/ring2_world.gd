@@ -63,6 +63,12 @@ func palette() -> PackedStringArray:
 	])
 
 
+## The warrior's ember/hem snap to the ring's own warm amber glow (palette-present),
+## so his fire reads amber here instead of colliding with the dissonant-pink signal.
+func ember_tint() -> Color:
+	return Color("c16e39")
+
+
 ## Reconfigure the rig's environment for the Singing Lands: a dark indigo backdrop
 ## with luminous flora, instead of Ring 1's pale cool haze. Call BEFORE the rig
 ## enters the tree (it builds its pipeline on _ready). Signal-hue palette aside,

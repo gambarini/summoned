@@ -38,10 +38,10 @@ const DIR_NAMES := [
 ## swapping the terrain ramp. 16 entries = the shader's `palette[16]` ceiling.
 @export var palette: PackedStringArray = PackedStringArray([
 	"2a333f", "36414f", "485462", "4c5a6d",
-	"566375", "5a697d", "616b78", "667383",
+	"566375", "5a697d", "667383",         # dropped near-dup mid-grey 616b78 for the warm slot
 	"6e7a89", "7c8591", "8b95a0",
 	"a8b1ba", "cbd2d3",
-	"c89a5e",
+	"c89a5e", "d4803a",  # warm: terrain tan + the warrior's reserved ember amber
 	"c4547a", "c0a0f0",  # signal: dissonant pink, harmonic lavender
 ])
 

@@ -65,6 +65,11 @@ func palette() -> PackedStringArray:
 	])
 
 
+## The warrior's ember/hem snap to the canyon's forge amber (palette-present).
+func ember_tint() -> Color:
+	return Color("d4803a")
+
+
 ## Reconfigure the rig for the Deep Canals: a warm dark canyon backdrop with forge-lit
 ## haze, instead of Ring 1's cool pale. Call BEFORE the rig enters the tree (it builds
 ## its pipeline on _ready). Warm key/ambient/fog sell the forge-lit canyon; kept modest
