@@ -67,6 +67,35 @@ func _ready() -> void:
 	print("attack: state=", warrior.vfx_state())
 	_capture("res://docs/gen/warrior_integ_attack.png")
 
+	# 5) Summon-assemble: face camera, re-enter SUMMONING, capture across the 2.5s arc
+	#    (rise + assemble from nothing, final pose = idle).
+	sync.raw_input_override = Vector2(0.0, 1.0)
+	await _settle(20)
+	sync.raw_input_override = Vector2.ZERO
+	await _settle(6)
+	warrior._change_state(warrior.State.SUMMONING)
+	for i in range(3):
+		await _settle(26)   # ~0.45s, 0.9s, 1.35s into the assemble
+		print("summon[", i, "]: state=", warrior.vfx_state(), " form=", sync.form_amount())
+		_capture("res://docs/gen/warrior_integ_summon_%d.png" % i)
+
+	# Let the SummoningTimer (2.5s) return him to IDLE before we can damage him
+	# (take_damage early-returns during SUMMONING).
+	for _n in range(120):
+		await get_tree().process_frame
+		if warrior.vfx_state() == "IDLE":
+			break
+	print("post-summon: state=", warrior.vfx_state())
+
+	# 6) Death-collapse: kill him (coherence -> 0 -> DYING) and capture the crumple +
+	#    sink + notation disperse across the 2.5s arc. DYING is terminal (no re-summon
+	#    after), so this must come last.
+	warrior.take_damage(9999)
+	for i in range(3):
+		await _settle(26)
+		print("death[", i, "]: state=", warrior.vfx_state(), " form=", sync.form_amount())
+		_capture("res://docs/gen/warrior_integ_death_%d.png" % i)
+
 	get_tree().quit()
 
 

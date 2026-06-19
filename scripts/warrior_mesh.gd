@@ -116,6 +116,23 @@ func set_cape(angle: float) -> void:
 	if _cape: _cape.rotation.x = angle
 
 
+## Assembled fraction: 1 = whole (idle), 0 = collapsed to nothing. Death plays this
+## 1->0 (crumple + sink), summon plays it 0->1 (rise + assemble), so the endpoints are
+## the idle pose for free. Feet stay planted (children all have local y>=0), so the
+## figure deforms toward the ground rather than imploding to a point. The vertical axis
+## collapses fully (he crumples flat) while the footprint only shrinks partway, so the
+## read survives even where the plateau has no geometry to occlude a sink (blockout §8).
+## WarriorSync reads back `scale.y` to keep the Hollow/notation glued to the falling chest.
+const FORM_FLAT_SCALE := 0.05   # min vertical scale — a thin heap on the ground
+const FORM_MIN_FOOTPRINT := 0.22  # min horizontal scale — a small dark patch, not a dot
+
+func set_form(f: float) -> void:
+	f = clampf(f, 0.0, 1.0)
+	var sy := lerpf(FORM_FLAT_SCALE, 1.0, f)
+	var sxz := lerpf(FORM_MIN_FOOTPRINT, 1.0, f)
+	scale = Vector3(sxz, sy, sxz)
+
+
 # --- Primitive builders ------------------------------------------------------
 
 func _pivot(pos: Vector3) -> Node3D:

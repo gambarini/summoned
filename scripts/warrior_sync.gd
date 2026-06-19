@@ -44,7 +44,8 @@ const _PX := 1.0 / SimSpace.PIXELS_PER_UNIT
 # warrior's sim facing: the wound is painted on the sprite, so it must follow the
 # sheet that's actually shown — which also makes it appear/vanish correctly as the
 # camera orbits. Param arrays re-authored from warrior.gd's `_HOLLOW_*`.
-const HOLLOW_Y := FEET_Y + WarriorMesh.CHEST_Y   # chest socket, world height
+# The Hollow now rides the chest as it collapses — its world height comes from
+# `_chest_world_y()` each frame rather than a fixed anchor (see death-collapse arc).
 const HOLLOW_DISC_PX := 32         # gradient disc resolution, like the 2D sprite
 const HOLLOW_VOID_SCALE := 0.72    # dark recess — kept wider than the ember
 const HOLLOW_GLOW_SCALE := 0.34    # burning core — tight point sunk in the void
@@ -84,6 +85,14 @@ var _walk_phase := 0.0
 var _walk_amt := 0.0
 var _atk := 0.0
 var _recoil := 0.0   # hurt knockback (0..1), eased
+# Form: 1 = whole (idle), 0 = collapsed to nothing. DYING eases it 1->0 (the mesh
+# crumples + sinks, the chest wound shrinks with it, the score-debris scatters);
+# SUMMONING snaps it to 0 then eases 0->1 (assembles, final pose = idle). The warrior
+# always spawns in SUMMONING (warrior.gd), so it starts at 0 and rises on the first run.
+var _form := 0.0
+var _form_eased := 0.0   # smoothstep(_form) — what the mesh/effects actually use
+var _form_sink := 0.0    # world-units the figure drops into the plateau as it collapses
+var _prev_vfx := ""
 var _notation: GPUParticles3D
 var _hollow: Node3D
 var _hollow_void: MeshInstance3D
@@ -99,9 +108,23 @@ func get_facing() -> String:
 	return _facing
 
 
+## Assembled fraction 0..1 (for verification): 0 collapsed, 1 whole. Drops on death,
+## rises on summon.
+func form_amount() -> float:
+	return _form
+
+
 ## The mesh's world position (feet) — output of the sim->world transform.
 func get_billboard_position() -> Vector3:
 	return _mesh.position
+
+
+## World height of the chest socket, tracking the collapse: the mesh scales the chest
+## from local CHEST_Y by its current vertical form-scale and the whole figure sinks, so
+## the Hollow and notation emitter stay glued to the falling chest instead of floating at
+## the full-height anchor. At idle (scale.y=1, sink=0) this is exactly FEET_Y + CHEST_Y.
+func _chest_world_y() -> float:
+	return FEET_Y + _bob_y - _form_sink + WarriorMesh.CHEST_Y * _mesh.scale.y
 
 
 ## Whether the Hollow is currently shown (for verification). Tracks the displayed
@@ -141,6 +164,10 @@ func setup(rig: IsoRig, warrior: CharacterBody2D, ember_tint := EMBER_TINT_DEFAU
 	_mesh.name = "WarriorMesh"
 	rig.add_world_child(_mesh)
 	_mesh.build(rig, ember_tint)
+	# Spawn collapsed: the warrior always starts in SUMMONING, so assemble from nothing.
+	# (setup runs _sync_position once before the first _animate; without this he'd flash
+	# at full size for that frame.)
+	_mesh.set_form(0.0)
 
 	# The mesh is the warrior now: suppress all 2D presentation in one line
 	# (a hidden root Node2D isn't drawn even when children set visible=true), and
@@ -415,14 +442,16 @@ func _disc_material(tex: Texture2D, blend: int, priority: int) -> StandardMateri
 func _update_hollow(delta: float) -> void:
 	if _hollow == null:
 		return
-	_hollow.position = SimSpace.to_world(_warrior.global_position, HOLLOW_Y + _bob_y)
+	_hollow.position = SimSpace.to_world(_warrior.global_position, _chest_world_y())
 	var s := clampi(_warrior.hollow_stress, 0, 3)
 	var f: float = HOLLOW_DIR_VIS.get(_facing, 1.0)
-	var shown := f > 0.0
+	# The wound shrinks with the body as he collapses and is gone once he's a flat heap.
+	var shown := f > 0.0 and _form_eased > 0.04
 	_hollow.visible = shown
 	if shown:
-		_hollow_void.scale = Vector3.ONE * (HOLLOW_VOID_SCALE * HOLLOW_RADIUS[s])
-		_hollow_ember.scale = Vector3.ONE * (HOLLOW_GLOW_SCALE * HOLLOW_RADIUS[s])
+		var fs := _form_eased
+		_hollow_void.scale = Vector3.ONE * (HOLLOW_VOID_SCALE * HOLLOW_RADIUS[s] * fs)
+		_hollow_ember.scale = Vector3.ONE * (HOLLOW_GLOW_SCALE * HOLLOW_RADIUS[s] * fs)
 		# Void alpha = facing factor (fades the recess on side facings, like 2D).
 		_hollow_void_mat.albedo_color.a = f
 		# Ember = stress brightness * facing * breathing pulse (0.6..1.0).
@@ -519,9 +548,10 @@ func _process(delta: float) -> void:
 		_bob_y = 0.0
 	_sync_facing()
 	_sync_position()
-	# World-space emitter follows the warrior; emitted glyphs stay put -> trail.
+	# World-space emitter follows the warrior; emitted glyphs stay put -> trail. The
+	# emitter rides the collapsing chest so the death disperse comes off the figure.
 	if _notation:
-		_notation.position = SimSpace.to_world(_warrior.global_position, NOTATION_Y)
+		_notation.position = SimSpace.to_world(_warrior.global_position, _chest_world_y())
 	_update_hollow(delta)
 
 
@@ -532,7 +562,8 @@ func _sync_position() -> void:
 	# Attack lunges forward along the facing; hurt jolts backward. (Both in sim px.)
 	var push := _atk * LUNGE_PX - _recoil * RECOIL_PX
 	var sim := _warrior.global_position + _face_dir * push
-	_mesh.position = SimSpace.to_world(sim, FEET_Y + _bob_y)
+	# _form_sink drops him into the plateau on death (and lifts him out of it on summon).
+	_mesh.position = SimSpace.to_world(sim, FEET_Y + _bob_y - _form_sink)
 
 
 # Procedural animation: walk cycle from velocity, sword swing from the attack states,
@@ -540,6 +571,15 @@ func _sync_position() -> void:
 const WALK_FREQ := 9.0       # rad/s leg cadence at full speed
 const ATTACK_RATE := 14.0    # how fast the sword eases toward its per-state target
 const REF_SPEED := 100.0     # warrior px/s at full move (paces the cadence)
+# Death/summon form arc. FORM_RATE traverses 0<->1 in ~2.2s so the collapse/assemble
+# completes just under the 2.5s Dying/Summoning timers (no pop when the timer fires).
+const FORM_RATE := 0.45
+const FORM_SINK_DEPTH := 0.6   # how far the heap settles below the feet at full collapse
+# Notation disperse on death: while the chest is still up, throw a full cloud of
+# score-debris (the song scattering); once he's crumpled past this, stop emitting so the
+# world-space glyphs hang and fade where they were, not as a fountain from underground.
+const NOTATION_BASE_RATIO := 0.32   # idle emission (the setup default)
+const NOTATION_DISPERSE_UNTIL := 0.5  # _form_eased below which death emission cuts off
 
 func _animate(delta: float) -> void:
 	var speed := _warrior.velocity.length()
@@ -565,6 +605,38 @@ func _animate(delta: float) -> void:
 
 	# Cape trails when moving and flares on the strike lunge.
 	_mesh.set_cape(0.06 + _walk_amt * 0.30 + maxf(_atk, 0.0) * 0.22)
+
+	_animate_form(s, delta)
+
+
+# Death-collapse / summon-assemble. Entering SUMMONING snaps the form to nothing so it
+# rises from zero; DYING eases it to nothing (crumple + sink); every other state holds
+# whole. Smoothstepped so death accelerates into the fall and summon settles into idle.
+func _animate_form(s: String, delta: float) -> void:
+	if s != _prev_vfx:
+		if s == "SUMMONING":
+			_form = 0.0   # reassemble from nothing (re-summon restarts the arc)
+		_prev_vfx = s
+	var target := 0.0 if s == "DYING" else 1.0
+	_form = move_toward(_form, target, delta * FORM_RATE)
+	_form_eased = smoothstep(0.0, 1.0, _form)
+	_form_sink = (1.0 - _form_eased) * FORM_SINK_DEPTH
+	_mesh.set_form(_form_eased)
+	_update_notation_emission(s)
+
+
+# Notation emission per state: a disperse cloud over the first half of the collapse,
+# then cut off; the idle rate otherwise (also restores it when a re-summon follows death).
+func _update_notation_emission(s: String) -> void:
+	if _notation == null:
+		return
+	if s == "DYING":
+		var dispersing := _form_eased > NOTATION_DISPERSE_UNTIL
+		_notation.amount_ratio = 1.0
+		_notation.emitting = dispersing
+	else:
+		_notation.amount_ratio = NOTATION_BASE_RATIO
+		_notation.emitting = true
 
 
 # The mesh faces its WORLD-absolute movement heading (true 3D). `_facing` — the
