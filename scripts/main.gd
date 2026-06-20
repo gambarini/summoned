@@ -140,6 +140,8 @@ func _end_run() -> void:
 	GameState.advance_clock()
 
 func _on_warrior_died() -> void:
+	if _run_ended:
+		return  # the run already resolved (extract/death race) — count it once
 	_end_run()
 	GameState.run_count += 1
 	GameState.grief_reserve = max(GameState.grief_reserve - 1, 0)
@@ -147,6 +149,8 @@ func _on_warrior_died() -> void:
 	get_tree().change_scene_to_file("res://scenes/base.tscn")
 
 func _on_warrior_extracted() -> void:
+	if _run_ended:
+		return  # the run already resolved (extract/death race) — count it once
 	_end_run()
 	GameState.extractions += 1
 	GameState.advance_ring()  # placeholder progression: extraction pushes one ring deeper

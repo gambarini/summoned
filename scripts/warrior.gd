@@ -21,6 +21,9 @@ var _bob_phase := 0.0
 const MAX_COHERENCE := 10
 const RESONANCE_RADIUS := 120.0
 const BURST_RADIUS := 80.0
+const SONG_RADIUS := 160.0          # The Song reaches wider than burst — arena-spanning
+const SONG_COST := 3                # Dissonant Song's coherence price (GDD §783)
+const SONG_PACIFY_DURATION := 4.0   # how long the Harmonic Song keeps enemies calmed
 const AttackArcScene := preload("res://scenes/attack_arc.tscn")
 const EnemyScript = preload("res://scripts/enemy.gd")
 const _NOTATION_SHEET := preload("res://assets/sprites/notation_glyphs.png")
@@ -211,6 +214,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		_do_resonance()
 	elif event.is_action_pressed("extract"):
 		_do_extract()
+	elif event is InputEventKey and event.pressed and not event.echo \
+			and event.physical_keycode == KEY_G and chain >= 4:
+		# Chain-5 finisher: spend the maxed chain on The Song. Raw-key bound (like
+		# main.gd's orbit) rather than an InputMap action to avoid editing the locked
+		# project.godot. KEY_G, not F — F is already the `extract` action, which sits
+		# earlier in this chain and would otherwise swallow the press. Provisional;
+		# promote to a proper InputMap action when input is revised.
+		_do_song()
 
 func _handle_movement(delta: float) -> void:
 	var dir := _read_dir()
@@ -789,6 +800,55 @@ func _do_burst() -> void:
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		if enemy.global_position.distance_to(global_position) <= BURST_RADIUS:
 			enemy.receive_hit(EnemyScript.Freq.DISSONANT)
+
+# ── Chain 5: The Song (GDD §783-784, §791) ─────────────────────────────────
+# The maxed-chain finisher, spent deliberately (gated on chain >= 4 in
+# _unhandled_input — the basic chain still caps at 4 / Harmonic Burst). What it does
+# is spectrum-dependent on how whole the tribe reformed him this summon
+# (tribe_coherence_tier: 0 whole/harmonic .. 3 raw/dissonant):
+#   • Deep harmonic (tier 0): the song resolves whole — every enemy in range is
+#     pacified and his Coherence is fully restored. Sung true, it costs nothing.
+#   • Otherwise (dissonant): catastrophic area dissonance — a DISSONANT pulse on
+#     every enemy in range (opposite-freq take damage, matching ones amplify) at a
+#     cost of SONG_COST Coherence. If that empties him, the song unmakes him — routed
+#     through DYING so the death plays out like any other.
+# Runs bare (no internal state guard), matching _do_burst/_do_resonance.
+func _do_song() -> void:
+	chain = 0
+	chain_changed.emit(chain)
+	if tribe_coherence_tier == 0:
+		for enemy in get_tree().get_nodes_in_group("enemies"):
+			if enemy.global_position.distance_to(global_position) <= SONG_RADIUS \
+					and enemy.has_method("pacify"):
+				enemy.pacify(SONG_PACIFY_DURATION)
+		coherence = MAX_COHERENCE
+		coherence_changed.emit(coherence)
+		_emit_song_vfx(Color(0.941, 0.910, 0.847, 0.5))  # warm near-white — the whole song
+	else:
+		for enemy in get_tree().get_nodes_in_group("enemies"):
+			if enemy.global_position.distance_to(global_position) <= SONG_RADIUS:
+				enemy.receive_hit(EnemyScript.Freq.DISSONANT)
+		coherence = max(coherence - SONG_COST, 0)
+		coherence_changed.emit(coherence)
+		_emit_song_vfx(Color(0.769, 0.329, 0.478, 0.55))  # harsh rose — dissonance
+		if coherence == 0:
+			_change_state(State.DYING)
+
+# The Song's shockwave, mirroring _do_resonance/_do_burst: a flat 3D ground disc
+# when the iso layer drives the VFX (suppress_world_vfx), else a 2D Polygon2D ring.
+func _emit_song_vfx(color: Color) -> void:
+	if suppress_world_vfx:
+		ground_pulse.emit(global_position, SONG_RADIUS, color)
+		return
+	var ring := Polygon2D.new()
+	ring.color = color
+	ring.polygon = _build_circle(SONG_RADIUS, 24)
+	get_parent().add_child(ring)
+	ring.global_position = global_position
+	var tween := create_tween().set_parallel(true)
+	tween.tween_property(ring, "scale", Vector2(1.5, 1.5), 0.45).from(Vector2(0.15, 0.15))
+	tween.tween_property(ring, "modulate:a", 0.0, 0.45).from(1.0)
+	tween.chain().tween_callback(ring.queue_free)
 
 func _do_extract() -> void:
 	if _state in [State.DYING, State.SUMMONING]:

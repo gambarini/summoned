@@ -22,6 +22,8 @@ var _reveal_timer := 0.0
 var _amplified := false
 var _amp_timer := 0.0
 var _force_amplified := false
+var _pacified := false
+var _pacify_timer := 0.0
 
 @onready var _visual: Polygon2D = $Visual
 @onready var _attack_timer: Timer = $AttackTimer
@@ -50,6 +52,10 @@ func _tick_status_timers(delta: float) -> void:
 			_revealed = false
 			if _state != State.DEAD:
 				_visual.color = _current_color()
+	if _pacified:
+		_pacify_timer -= delta
+		if _pacify_timer <= 0.0:
+			_pacified = false
 
 func _physics_process(delta: float) -> void:
 	_tick_status_timers(delta)
@@ -75,6 +81,8 @@ func reveal(duration: float) -> void:
 		_visual.color = COLORS[frequency]
 
 func _on_detect_entered(body: Node2D) -> void:
+	if _pacified:
+		return
 	if body.has_method("take_damage"):
 		_player = body
 		if _state == State.IDLE:
@@ -86,6 +94,8 @@ func _on_detect_exited(body: Node2D) -> void:
 		_player = null
 
 func _on_attack_entered(body: Node2D) -> void:
+	if _pacified:
+		return
 	if body.has_method("take_damage") and _state != State.DEAD:
 		_player = body
 		_state = State.ATTACK
@@ -132,6 +142,21 @@ func _flash(flash_color: Color) -> void:
 func force_amplify() -> void:
 	_force_amplified = true
 	_amplified = true
+	_visual.color = _current_color()
+
+## Harmonic resolution from the warrior's Chain-5 Song (GDD §784): the enemy is
+## calmed — pulled out of chase/attack and barred from re-acquiring the player for
+## `duration`. A held flag (`_pacified`, ticked down in _tick_status_timers) the
+## Song's harmonic branch sets on every enemy in range; the detect/attack handlers
+## ignore the player while it holds. Never applied to the dead.
+func pacify(duration: float) -> void:
+	if _state == State.DEAD:
+		return
+	_pacified = true
+	_pacify_timer = duration
+	_state = State.IDLE
+	_player = null
+	_attack_timer.stop()
 	_visual.color = _current_color()
 
 func _die() -> void:
