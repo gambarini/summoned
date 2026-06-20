@@ -23,6 +23,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 GameState="*res://scripts/game_state.gd"
+GodotIQRuntime="*uid://dyyc7nqwab6ks"
 
 [display]
 
@@ -32,6 +33,10 @@ window/size/window_width_override=1920
 window/size/window_height_override=1080
 window/stretch/mode="canvas_items"
 window/stretch/scale_mode="integer"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godotiq/plugin.cfg")
 
 [input]
 

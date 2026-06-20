@@ -8,3 +8,7 @@
 # Python tooling cache
 __pycache__/
 *.pyc
+
+# GodotIQ local config — contains license key + bridge token, never commit
+.mcp.json
+.godotiq/
