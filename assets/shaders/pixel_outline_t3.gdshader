@@ -6,7 +6,10 @@ render_mode unshaded, cull_disabled, depth_draw_never, depth_test_disabled, fog_
 // and SCREEN_TEXTURE ordering is never a concern. It darkens two kinds of edge:
 //   * SILHOUETTE  -- a foreshorten-corrected first-difference of view-space depth,
 //     so a far object against a near one inks, but a steeply-slanted ground plane
-//     (large but smooth depth gradient) does NOT false-edge.
+//     (large but smooth depth gradient) does NOT false-edge. Drawn SINGLE-SIDED:
+//     only the nearer (front) fragment of a depth discontinuity inks, so the line
+//     is one texel wide and hugs the silhouette instead of a two-texel band
+//     straddling it.
 //   * CREASE      -- a Laplacian of view-space depth, which spikes where the
 //     surface slope changes (a box corner) yet stays ~0 on any flat (even slanted)
 //     surface.
@@ -55,10 +58,12 @@ void fragment() {
 	vec3 nrm = normalize(cross(p_r - p_l, p_d - p_u));
 	float facing = clamp(abs(nrm.z), 0.08, 1.0);
 
-	// Silhouette: largest first-difference of depth, tolerance scaled by foreshortening.
-	float d_diff = max(max(abs(z_c - z_l), abs(z_c - z_r)),
-					   max(abs(z_c - z_u), abs(z_c - z_d)));
-	float sil = step(depth_threshold / facing, d_diff);
+	// Silhouette, SINGLE-SIDED: only ink the fragment that is NEARER than its
+	// neighbour (a neighbour farther away by > tolerance). This keeps the line one
+	// texel wide, hugging the front object, instead of a two-texel band where both
+	// the near and far sides of the discontinuity light up.
+	float d_far = max(max(z_l - z_c, z_r - z_c), max(z_u - z_c, z_d - z_c));
+	float sil = step(depth_threshold / facing, d_far);
 
 	// Crease: Laplacian of depth spikes at slope changes, ~0 on flat/slanted planes.
 	float lap = abs((z_l + z_r + z_u + z_d) - 4.0 * z_c);

@@ -78,7 +78,7 @@ const OUTLINE_FADE_TIME := 0.18
 
 # --- Cel shading ---------------------------------------------------------
 @export var cel_bands := 2.0       # number of hard light steps
-@export var cel_light_gain := 0.3  # how much the directional adds (low = soft)
+@export var cel_light_gain := 0.6  # directional contribution; higher = clearer lit/shadow split so forms read as 3D
 
 # --- Post pass --------------------------------------------------------------
 @export var vignette_strength := 0.0  # corner darkening (per-ring); 0 = off
@@ -87,10 +87,10 @@ const OUTLINE_FADE_TIME := 0.18
 ## Transparent depth-based ink overlay (silhouette + crease). Reads only the depth
 ## buffer, so it is renderer-portable. Fades out during active orbit.
 @export var outline_enabled := true
-@export var outline_strength := 1.0
-@export var outline_color := Color(0.08, 0.10, 0.14)
-@export var outline_depth_threshold := 0.16
-@export var outline_normal_threshold := 0.12
+@export var outline_strength := 0.28          # faint: a hint of a silhouette, not a border ringing every form
+@export var outline_color := Color(0.10, 0.12, 0.17)  # darker than the palette so it reads as a thin line, not a grey halo
+@export var outline_depth_threshold := 0.45   # only strong silhouettes ink, so small/shallow forms get no border at all
+@export var outline_normal_threshold := 0.7   # creases effectively off — no internal edge lines
 
 var _world_viewport: SubViewport  # the 3D render (padded by PAD on each side)
 var _post_viewport: SubViewport   # 3D render + palette post (also padded)
@@ -397,7 +397,21 @@ func _build_display() -> void:
 func _resize_screen() -> void:
 	if _screen_viewport == null:
 		return
-	var dev: Vector2i = get_window().size
+	# Map the composite to the canvas's INTEGER-stretched device region, NOT the raw
+	# window framebuffer. On a HiDPI/Retina display the framebuffer (e.g. 2920x1753) is
+	# not an integer multiple of the 480x270 base, but `canvas_items` + `integer` stretch
+	# only rasterizes the 2D canvas into base*factor (2880x1620) and letterboxes the rest.
+	# Sizing this device viewport to the raw framebuffer left the final `_window_view` blit
+	# fractionally resampling (~0.92x NEAREST) the pixel-perfect render -> the whole frame
+	# read as blurry. content_scale_size*factor makes render->screen_viewport->window all
+	# integer / 1:1. (On a non-HiDPI window the two sizes coincide, which is why the spike
+	# verified crisp; the bug only surfaces when framebuffer != base*factor.)
+	var win := get_window()
+	var base: Vector2i = win.content_scale_size
+	if base.x <= 0 or base.y <= 0:
+		base = win.size
+	var factor := maxi(1, mini(win.size.x / base.x, win.size.y / base.y))
+	var dev: Vector2i = base * factor
 	dev.x = maxi(dev.x, render_size.x)
 	dev.y = maxi(dev.y, render_size.y)
 	_upscale = maxi(1, mini(dev.x / render_size.x, dev.y / render_size.y))

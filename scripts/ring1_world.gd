@@ -46,9 +46,9 @@ var _rig: IsoRig
 func apply_environment(rig: IsoRig) -> void:
 	rig.bg_color = Color("505d70")   # deeper than the haze so distance reads as depth
 	rig.fog_color = COL_FOG          # measured pale sky/haze (5a697d)
-	rig.fog_density = 0.016          # ~4x the old default — far lowland fades to haze
-	rig.ambient_energy = 0.5         # was 1.0; let the key light + fog carry the dusk
-	rig.vignette_strength = 0.35     # darken corners so the world sits in haze, not floats
+	rig.fog_density = 0.008          # ~2x the rig default — far lowland still fades, near stays clear
+	rig.ambient_energy = 0.42        # slightly deeper fill so shadow sides drop and forms gain contrast
+	rig.vignette_strength = 0.18     # light corner settle, not a murky frame (was 0.35 — read as gloom)
 
 
 ## Populate this node with the Ring 1 terrain + props, drawing cel materials from
