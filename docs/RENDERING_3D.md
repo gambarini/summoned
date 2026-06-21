@@ -105,6 +105,31 @@ are covered) so terrain reaches every edge instead of showing a void.
 
 ---
 
+## t3ssel8r follow-camera + sub-pixel pipeline (live in `iso_rig.gd`)
+
+The rig follows the warrior (pivot tracks his world position; he stays ~centred, the world
+scrolls) and renders crawl-free crisp pixels. Ported from the proven spike
+(`docs/PIXELART_T3_SPIKE.md`); the integration write-up is `memory pixelart_t3_integration`.
+
+- **Padded render target.** Both render SubViewports are `render_size + 2·PAD` (PAD=3); the
+  ortho `size` is scaled by `_padded.y/render_size.y` so `world_per_texel = cam_size /
+  render_size.y` is constant. The overscan is headroom for the sub-pixel slide.
+- **Texel-snap follow** (`set_follow_target` → `_apply_follow`): decompose the follow target
+  onto the camera's screen right/up/forward axes, snap right & up to whole texels (keep
+  forward continuous), and replay the snapped-away fraction as the display blit offset.
+- **Device-res offset carrier.** The offset can't live in the project's stretched 480×270
+  `canvas_items` canvas (pixel-snapped, coarse). So a `_screen_viewport` is built at the
+  device framebuffer size; the padded post is blit into it NEAREST at the integer
+  `_upscale`, **offset baked in there**, then shown FULL_RECT → it maps 1:1 to device. The
+  2D HUD (its own `CanvasLayer`) cannot move with the offset by construction.
+- **Depth outline** (`assets/shaders/pixel_outline_t3.gdshader`): a transparent quad child of
+  the camera; silhouette + crease from depth only. Faded to 0 during active orbit.
+- **`world_to_render(world)`** un-does PAD + the sub-pixel offset so screen→world aim
+  (`warrior_sync.aim_dir_from_screen`) stays correct — without it, attack aim skews by ~PAD.
+- **Verify windowed** (`--headless` can't render 3D): capture the deterministic
+  `get_screen_viewport()`, not the OS window. `use_taa=false`, `msaa_3d=DISABLED` on the
+  world viewport or TAA dominates orbit shimmer.
+
 ## Gotchas (all learned the hard way)
 
 - **`SubViewportContainer` with `stretch = true` resizes its child SubViewport to the
@@ -117,8 +142,9 @@ are covered) so terrain reaches every edge instead of showing a void.
   and parses `OS.get_cmdline_user_args()`. (See `memory headless_test_workflow`.)
 - **Orthographic camera + depth fog** washes the whole frame if the camera is far back —
   fog is distance-from-camera based. Keep the camera close.
-- **Edge pixel-shimmer/crawl during rotation** is the standard low-res-3D tax. Acceptable
-  in the prototype; fix later with camera pixel-snap / sub-pixel smoothing.
+- **Edge pixel-shimmer/crawl during *translation*** is solved (see the t3ssel8r section
+  below). Crawl during pure camera **orbit** is structural (reprojection — no 2D offset can
+  cancel it); the depth outline is faded out while orbiting because it amplifies it.
 
 ## Tuning knobs (where the look lives)
 

@@ -155,14 +155,16 @@ func hollow_shown() -> bool:
 ## to ground direction, so no hand-rolled ground raycast is needed. `screen_pos`
 ## is in root-viewport (window) coordinates.
 func aim_dir_from_screen(screen_pos: Vector2) -> Vector2:
-	var cam := _rig.get_camera()
 	var render_size := Vector2(_rig.render_size)
 	var win := get_viewport().get_visible_rect().size
-	# Inverse of the display TextureRect's KEEP_ASPECT_CENTERED letterbox.
+	# Inverse of the display's KEEP_ASPECT_CENTERED letterbox: cursor -> render-space.
 	var fit := minf(win.x / render_size.x, win.y / render_size.y)
 	var offset := (win - render_size * fit) * 0.5
 	var vp_pos := (screen_pos - offset) / fit
-	var warrior_vp := cam.unproject_position(SimSpace.to_world(_warrior.global_position, HOVER_Y))
+	# Locate the warrior in the SAME displayed render-space — the rig undoes the padded
+	# viewport (unproject returns padded coords) + the live sub-pixel blit offset, so
+	# the aim origin matches the cursor space under the t3 pipeline.
+	var warrior_vp := _rig.world_to_render(SimSpace.to_world(_warrior.global_position, HOVER_Y))
 	return _rig.camera_relative_dir(vp_pos - warrior_vp)
 
 

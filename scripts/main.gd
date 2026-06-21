@@ -99,6 +99,9 @@ func _ready() -> void:
 	# density). Set at summon, held all run — re-derived each run as grief shifts.
 	$Warrior.tribe_coherence_tier = GameState.coherence_tier()
 	_warrior_sync.setup(_rig, $Warrior, ember_tint)
+	# setup() places the mesh (its _sync_position), so centre the follow camera on the
+	# warrior now — the first rendered frame is already framed, no startup jump.
+	_rig.set_follow_target(_warrior_sync.get_billboard_position())
 
 	_world_sync = WorldSync.new()
 	add_child(_world_sync)
@@ -133,6 +136,15 @@ func _process(delta: float) -> void:
 		spin -= 1.0
 	if spin != 0.0:
 		_rig.orbit(spin * ROT_SPEED * delta)
+
+	# Path A follow camera: the pivot tracks the warrior each frame, so the world
+	# scrolls under a (roughly) centred warrior. This translation is what the rig's
+	# texel-snap + sub-pixel offset smooth into crawl-free motion. A 1-frame position
+	# lag here is sub-milli-texel at the warrior's speed, so reading last frame's mesh
+	# position is fine. Independent movers (enemies/arcs) keep their own sub-texel
+	# crawl — the single follow offset only re-centres the warrior (accepted).
+	if is_instance_valid(_warrior_sync):
+		_rig.set_follow_target(_warrior_sync.get_billboard_position())
 
 
 func _end_run() -> void:

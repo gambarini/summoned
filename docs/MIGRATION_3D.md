@@ -24,7 +24,10 @@
 > flora, terraced walls, central mechanism) and Ring 5 (Still Heart — cold near-monochrome grey rose
 > garden "form without warmth", a central violet converging-spire altar). Each ring's palette is
 > measured from its concept art; warrior-vs-ground solved per ring by a lighter walkable stage.
-> Remaining: camera pixel-snap, optional warm-effect palette retune (both lower-leverage polish).
+> **Camera pixel-snap DONE (2026-06-21):** the t3ssel8r follow-camera + sub-pixel + depth-outline
+> pipeline is live in `iso_rig.gd` (Path A: the camera now follows the warrior). Translation crawl
+> solved; orbit crawl is structural and the outline fades during orbit. See `RENDERING_3D.md` +
+> `memory pixelart_t3_integration`. Remaining: optional warm-effect palette retune (lower-leverage).
 
 ## Start here (fresh session)
 
@@ -32,9 +35,10 @@
 visual identity reads** (bob, notation, ability shockwaves, the Hollow chest wound, the hem/shimmer
 overlay). **Phase 5 is in progress** — bounds/aspect is done (`PPU = 18` locked; plateau widened
 26→28; the aspect clash was benign — see the Phase 5 entry + the resolved sim↔world open
-question). Remaining: camera pixel-snap, and the optional warm-effect palette retune
-(the cool palette currently cool-shifts the Hollow ember to pink, accepted as-is). See entries
-below.
+question). **Camera pixel-snap is done (2026-06-21)** — the t3ssel8r follow-camera pipeline is
+live in `iso_rig.gd` (translation crawl solved, depth outlines, aim fixed; orbit crawl is
+structural). Remaining: the optional warm-effect palette retune (the cool palette currently
+cool-shifts the Hollow ember to pink, accepted as-is). See entries below.
 
 1. Read `CLAUDE.md` (direction + conventions), then `docs/RENDERING_3D.md` (the proven
    pipeline), then skim the **Phases** section below for what's ✅ DONE and what each

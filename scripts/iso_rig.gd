@@ -25,6 +25,18 @@ const DIR_NAMES := [
 	"south", "south-west", "west", "north-west",
 ]
 
+# --- t3ssel8r pixel-art machinery (ported from the proven spike) ----------
+## Texels of overscan added to each side of the render target so the final blit
+## can slide by the sub-pixel remainder without revealing a gap at the edge.
+const PAD := 3
+## Pivot height the follow camera tracks at; the warrior's x/z drive it, y is held
+## constant so vertical hover never pumps the frame.
+const FOLLOW_PIVOT_Y := 0.5
+## Seconds for the depth outline to fade back in after the camera stops orbiting.
+## The outline pass amplifies the (structural, unfixable) orbit-reprojection crawl,
+## so it is faded toward 0 while actively orbiting (spike finding).
+const OUTLINE_FADE_TIME := 0.18
+
 # --- Render / pipeline ---------------------------------------------------
 ## Internal render resolution (chunky pixel grid). Both SubViewports lock here.
 @export var render_size := Vector2i(320, 180)
@@ -71,14 +83,42 @@ const DIR_NAMES := [
 # --- Post pass --------------------------------------------------------------
 @export var vignette_strength := 0.0  # corner darkening (per-ring); 0 = off
 
-var _world_viewport: SubViewport  # the 3D render
-var _post_viewport: SubViewport   # 3D render + palette post (this is what's captured)
-var _display: TextureRect         # on-screen scaled view
+# --- Depth outline (t3ssel8r) -----------------------------------------------
+## Transparent depth-based ink overlay (silhouette + crease). Reads only the depth
+## buffer, so it is renderer-portable. Fades out during active orbit.
+@export var outline_enabled := true
+@export var outline_strength := 1.0
+@export var outline_color := Color(0.08, 0.10, 0.14)
+@export var outline_depth_threshold := 0.16
+@export var outline_normal_threshold := 0.12
+
+var _world_viewport: SubViewport  # the 3D render (padded by PAD on each side)
+var _post_viewport: SubViewport   # 3D render + palette post (also padded)
+var _screen_viewport: SubViewport # device-res composite; the sub-pixel offset lives here
+var _display: TextureRect         # padded post, upscaled NEAREST into _screen_viewport
+var _window_view: TextureRect     # shows _screen_viewport 1:1 in the stretched canvas
 var _pivot: Node3D
 var _camera: Camera3D
 var _yaw := 0.0
 var _cel_shader: Shader
+var _outline_mat: ShaderMaterial
 var _built := false
+
+# Derived pixel-grid geometry (set in _ensure_built / _resize_screen).
+var _padded := Vector2i(326, 186)
+var _world_per_texel := 1.0
+var _upscale := 6
+var _base_display_pos := Vector2.ZERO  # _display position at zero sub-pixel offset
+
+# Follow-camera state. The consumer feeds the warrior's world position each frame
+# (Path A): the pivot tracks it, snapped to whole texels on the camera's screen
+# axes, and the fractional remainder is replayed as the blit offset -> smooth
+# motion of crisp, texel-stable pixels.
+var _follow_enabled := false
+var _follow_target := Vector3(0.0, FOLLOW_PIVOT_Y, 0.0)
+
+# Outline-fade: 1.0 right after an orbit input, decays to 0 over OUTLINE_FADE_TIME.
+var _orbit_activity := 0.0
 
 
 func _ready() -> void:
@@ -96,6 +136,12 @@ func _ensure_built() -> void:
 	_built = true
 	_yaw = initial_yaw
 	_cel_shader = load("res://assets/shaders/cel.gdshader")
+	# Padded render target + constant world-per-texel: the padded viewport renders a
+	# few extra texels each side, but the ortho size is scaled up to match so each
+	# texel still covers `cam_size / render_size.y` world units (the visible framing
+	# is unchanged; the overscan is pure headroom for the sub-pixel slide).
+	_padded = render_size + Vector2i(2 * PAD, 2 * PAD)
+	_world_per_texel = cam_size / float(render_size.y)
 	_build_display()
 	_build_world()
 
@@ -138,6 +184,87 @@ func orbit(delta_deg: float) -> void:
 	_ensure_built()
 	_yaw = fmod(_yaw + delta_deg, 360.0)
 	_pivot.rotation_degrees.y = _yaw
+	if delta_deg != 0.0:
+		# Orbit reprojects the scene every frame — a structural crawl the snap cannot
+		# fix and the outline pass amplifies. Mark activity so _process fades the ink.
+		_orbit_activity = 1.0
+	# Re-snap the follow against the new screen axes so the framing stays texel-locked
+	# through the rotation.
+	if _follow_enabled:
+		_apply_follow()
+
+
+## Feed the follow target each frame (Path A): the camera pivot tracks `world_pos`
+## (x/z only; height held at FOLLOW_PIVOT_Y). The pivot is snapped to whole texels on
+## the camera's screen axes and the fractional remainder is replayed as the blit
+## offset, so the warrior stays centred while crisp, texel-stable pixels slide
+## smoothly under him. Enables follow mode on first call.
+func set_follow_target(world_pos: Vector3) -> void:
+	_ensure_built()
+	_follow_enabled = true
+	_follow_target = Vector3(world_pos.x, FOLLOW_PIVOT_Y, world_pos.z)
+	_apply_follow()
+
+
+## The device-resolution composite SubViewport (the sub-pixel offset lives in its
+## blit). This is what a deterministic capture should sample — NOT the OS window,
+## whose size the project's content-scale settings can misreport.
+func get_screen_viewport() -> SubViewport:
+	_ensure_built()
+	return _screen_viewport
+
+
+## Project a world point to DISPLAYED render-space coordinates (0..render_size) — the
+## same space the cursor lands in after undoing the display letterbox. The camera now
+## renders into a PADDED viewport, so `unproject_position` returns padded coords (inset
+## by PAD); and the sub-pixel blit shifts the displayed image. Both are undone here so
+## screen-space aim (mouse -> world direction) stays correct under the new pipeline.
+func world_to_render(world_pos: Vector3) -> Vector2:
+	_ensure_built()
+	var padded := _camera.unproject_position(world_pos)
+	var sub := (_display.position - _base_display_pos) / float(_upscale)  # = (-frac.x, frac.y)
+	return padded - Vector2(PAD, PAD) + sub
+
+
+# Decompose the follow target onto the camera's screen right/up axes, snap each to
+# whole texels (keeping depth — the forward axis — continuous so nothing pops in z),
+# and replay the snapped-away fraction as the display offset.
+func _apply_follow() -> void:
+	if _camera == null:
+		return
+	var b := _camera.global_transform.basis
+	var right := b.x.normalized()
+	var up := b.y.normalized()
+	var fwd := -b.z.normalized()
+
+	var a := _follow_target.dot(right)
+	var c := _follow_target.dot(up)
+	var d := _follow_target.dot(fwd)
+	var a_s: float = round(a / _world_per_texel) * _world_per_texel
+	var c_s: float = round(c / _world_per_texel) * _world_per_texel
+	_pivot.position = right * a_s + up * c_s + fwd * d
+
+	var frac := Vector2((a - a_s) / _world_per_texel, (c - c_s) / _world_per_texel)
+	_set_subpixel_offset(frac)
+
+
+# Snapping the camera back by `frac` texels shifts the projected world forward on
+# screen; offset the blit by -frac (in screen px) to cancel it, so the composited
+# image slides smoothly by the true sub-texel amount while the RT pixels stay crisp
+# and stable. Sign verified empirically in the spike (a screen-right pan must yield a
+# smooth +1px/frame composited shift).
+func _set_subpixel_offset(frac_texels: Vector2) -> void:
+	if _display == null:
+		return
+	var off := Vector2(-frac_texels.x, frac_texels.y) * float(_upscale)
+	_display.position = _base_display_pos + off
+
+
+func _process(delta: float) -> void:
+	if _orbit_activity > 0.0 and _outline_mat != null:
+		_orbit_activity = maxf(0.0, _orbit_activity - delta / OUTLINE_FADE_TIME)
+		_outline_mat.set_shader_parameter("outline_strength",
+			outline_strength * (1.0 - _orbit_activity))
 
 
 ## A cel/toon material with the given albedo. All world geometry should use this.
@@ -205,22 +332,28 @@ func _camera_ground_basis() -> Array:
 # --- Pipeline construction (verbatim port of the spike) ------------------
 
 func _build_display() -> void:
-	# Both SubViewports stay locked at render_size — they must NOT live under a
-	# SubViewportContainer, whose stretch would resize them to the window. Chain:
-	# 3D world -> _world_viewport -> TextureRect(palette post) -> _post_viewport
-	# (captured) -> display TextureRect scaled up nearest-neighbour.
+	# Chain: 3D world -> _world_viewport (PADDED) -> TextureRect(palette post) ->
+	# _post_viewport (PADDED) -> _display TextureRect upscaled NEAREST into
+	# _screen_viewport (DEVICE res) with the sub-pixel offset baked into the blit ->
+	# _window_view shows _screen_viewport 1:1 in the stretched canvas. None of the
+	# render viewports may live under a SubViewportContainer (its stretch would
+	# resize them to the window).
 	_world_viewport = SubViewport.new()
-	_world_viewport.size = render_size
+	_world_viewport.size = _padded
 	_world_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	# No temporal/MSAA jitter — it would masquerade as (and dominate) orbit shimmer.
+	_world_viewport.use_taa = false
+	_world_viewport.msaa_3d = Viewport.MSAA_DISABLED
+	_world_viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	add_child(_world_viewport)
 
 	_post_viewport = SubViewport.new()
-	_post_viewport.size = render_size
+	_post_viewport.size = _padded
 	_post_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(_post_viewport)
 
 	var post_rect := TextureRect.new()
-	post_rect.size = Vector2(render_size)
+	post_rect.size = Vector2(_padded)
 	post_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	post_rect.stretch_mode = TextureRect.STRETCH_SCALE
 	post_rect.texture = _world_viewport.get_texture()
@@ -228,13 +361,53 @@ func _build_display() -> void:
 	post_rect.material = _make_post_material()
 	_post_viewport.add_child(post_rect)
 
+	# Composite at DEVICE resolution. canvas_items stretch rasterizes the final
+	# window at the device framebuffer, so a device-sized SubViewport shown FULL_RECT
+	# maps 1:1 to device pixels — that is what lets the sub-pixel offset (which needs
+	# device-pixel granularity) survive the project's 2D-transform pixel snap. The
+	# 480x270 HUD on its own CanvasLayer cannot move with the offset: the offset lives
+	# inside this viewport's texture, not in any canvas transform.
+	_screen_viewport = SubViewport.new()
+	_screen_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(_screen_viewport)
+
 	_display = TextureRect.new()
 	_display.texture = _post_viewport.get_texture()
-	_display.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_display.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_display.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_display.stretch_mode = TextureRect.STRETCH_SCALE
 	_display.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	add_child(_display)
+	_screen_viewport.add_child(_display)
+
+	_window_view = TextureRect.new()
+	_window_view.texture = _screen_viewport.get_texture()
+	_window_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_window_view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_window_view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_window_view.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	add_child(_window_view)
+
+	_resize_screen()
+	get_window().size_changed.connect(_resize_screen)
+
+
+## Size the device-res composite and the upscale to the live window, and recentre the
+## padded display. Re-run on window resize. The upscale is the largest integer that
+## fits render_size into the device — derived, never hardcoded, so it is correct on a
+## ×6 (1920×1080) window or any other integer-multiple device size.
+func _resize_screen() -> void:
+	if _screen_viewport == null:
+		return
+	var dev: Vector2i = get_window().size
+	dev.x = maxi(dev.x, render_size.x)
+	dev.y = maxi(dev.y, render_size.y)
+	_upscale = maxi(1, mini(dev.x / render_size.x, dev.y / render_size.y))
+	_screen_viewport.size = dev
+	_display.size = Vector2(_padded) * float(_upscale)
+	# Centre the inner (unpadded) render region in the device viewport, then shift by
+	# -PAD*upscale so the overscan sits off-screen on every side.
+	_base_display_pos = (Vector2(dev) - Vector2(render_size) * float(_upscale)) * 0.5 \
+		- Vector2(PAD, PAD) * float(_upscale)
+	_display.position = _base_display_pos
 
 
 func _make_post_material() -> ShaderMaterial:
@@ -246,7 +419,7 @@ func _make_post_material() -> ShaderMaterial:
 	mat.shader = load("res://assets/shaders/pixel_post.gdshader")
 	mat.set_shader_parameter("palette", pal)
 	mat.set_shader_parameter("palette_count", pal.size())
-	mat.set_shader_parameter("tex_size", Vector2(render_size))
+	mat.set_shader_parameter("tex_size", Vector2(_padded))
 	mat.set_shader_parameter("dither_strength", 0.0)  # flat bands, not stippled blend
 	mat.set_shader_parameter("edge_strength", 0.0)    # no ink outline
 	mat.set_shader_parameter("vignette", vignette_strength)
@@ -292,12 +465,14 @@ func _make_key_light() -> DirectionalLight3D:
 func _make_camera_rig() -> Node3D:
 	_pivot = Node3D.new()
 	_pivot.name = "CameraPivot"
-	_pivot.position = Vector3(0.0, 0.5, 0.0)
+	_pivot.position = Vector3(0.0, FOLLOW_PIVOT_Y, 0.0)
 	_pivot.rotation_degrees = Vector3(pivot_pitch, _yaw, 0.0)
 
 	_camera = Camera3D.new()
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL  # the iso-defining choice
-	_camera.size = cam_size
+	# Scale the ortho size up for the overscan so each texel still covers the same
+	# world distance as an unpadded render — the visible framing is identical.
+	_camera.size = cam_size * float(_padded.y) / float(render_size.y)
 	# Ortho is distance-independent, so keep the camera near — a far camera makes
 	# depth fog wash the whole frame.
 	_camera.position = Vector3(0.0, 0.0, cam_distance)
@@ -305,4 +480,28 @@ func _make_camera_rig() -> Node3D:
 	_camera.far = 400.0
 	_camera.current = true
 	_pivot.add_child(_camera)
+	# Depth-outline overlay rides the camera (full-screen quad in the transparent
+	# pass; reads only DEPTH_TEXTURE). Fades out during active orbit.
+	if outline_enabled:
+		_camera.add_child(_make_outline_overlay())
 	return _pivot
+
+
+func _make_outline_overlay() -> MeshInstance3D:
+	var quad := QuadMesh.new()
+	quad.size = Vector2(2.0, 2.0)
+	_outline_mat = ShaderMaterial.new()
+	_outline_mat.shader = load("res://assets/shaders/pixel_outline_t3.gdshader")
+	_outline_mat.set_shader_parameter("view_size", Vector2(_padded))
+	_outline_mat.set_shader_parameter("depth_threshold", outline_depth_threshold)
+	_outline_mat.set_shader_parameter("normal_threshold", outline_normal_threshold)
+	_outline_mat.set_shader_parameter("outline_color",
+		Vector3(outline_color.r, outline_color.g, outline_color.b))
+	_outline_mat.set_shader_parameter("outline_strength", outline_strength)
+	var mi := MeshInstance3D.new()
+	mi.name = "OutlineOverlay"
+	mi.mesh = quad
+	mi.material_override = _outline_mat
+	mi.extra_cull_margin = 16384.0  # never frustum-culled (it is full-screen clip space)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
