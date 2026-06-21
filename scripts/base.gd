@@ -1,15 +1,51 @@
 extends Node2D
 
+## The between-runs base, now a low-res 3D iso scene (the Villa) instead of the old
+## 2D diorama — same hybrid pattern as `main.gd`: the scene owns an `IsoRig` and
+## mounts a 3D terrain builder (`VillaWorld`) into it, with the 2D HUD on top. There
+## is no roaming warrior here, so the rig's follow camera stays disabled (the villa
+## sits centred at the origin) and the player only orbits with Q/E.
+
+const ROT_SPEED := 90.0  # deg/sec free camera orbit (Q/E), pitch stays locked
+
 @onready var _run_label: Label = $HUD/RunLabel
 @onready var _grief_bar: HBoxContainer = $HUD/GriefBar
 @onready var _summon_label: Label = $HUD/SummonLabel
 @onready var _clock_label: Label = $HUD/ClockLabel
 
+var _rig: IsoRig
+var _world: Node3D
+
 func _ready() -> void:
+	# --- 3D presentation: build the Villa under the shared rig (per-ring pattern). The
+	# old 2D floor grid + 2D Anthe are replaced by the 3D villa, so hide them. ---
+	if has_node("FloorGrid"):
+		$FloorGrid.visible = false
+	if has_node("Anthe"):
+		$Anthe.visible = false
+	_rig = load("res://scenes/iso_rig.tscn").instantiate()
+	_world = VillaWorld.new()
+	_world.apply_environment(_rig)
+	add_child(_rig)
+	_world.build(_rig)
+	_rig.add_world_child(_world)
+
 	_run_label.text = "RUN %d  EXT %d" % [GameState.run_count, GameState.extractions]
 	_build_grief_bar()
 	_update_summon_label()
 	_update_clock()
+
+
+func _process(delta: float) -> void:
+	if not is_instance_valid(_rig):
+		return
+	var spin := 0.0
+	if Input.is_physical_key_pressed(KEY_E) or Input.is_physical_key_pressed(KEY_RIGHT):
+		spin += 1.0
+	if Input.is_physical_key_pressed(KEY_Q) or Input.is_physical_key_pressed(KEY_LEFT):
+		spin -= 1.0
+	if spin != 0.0:
+		_rig.orbit(spin * ROT_SPEED * delta)
 
 func _build_grief_bar() -> void:
 	for i in range(GameState.MAX_GRIEF):

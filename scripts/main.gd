@@ -16,51 +16,28 @@ const EnemyBase        := preload("res://scripts/enemy.gd")
 
 const ROT_SPEED := 90.0  # deg/sec free camera orbit (Q/E), pitch stays locked
 
-# Per-ring enemy spawn tables (sim-space px; the bounds are universal, so positions
-# are ring-independent). Keyed by GameState.current_ring; missing keys fall back to
-# Ring 1's set. Spawns live here, not on the terrain builders — the builders own
-# only terrain + palette + environment (Phase 5).
-const SPAWNS := {
-	1: [
-		[EnemyScene,        Vector2(80, 50)],
-		[EnemyScene,        Vector2(400, 50)],
-		[EnemyScene,        Vector2(80, 220)],
-		[EnemyFleerScene,   Vector2(400, 220)],
-		[EnemyPhaserScene,  Vector2(240, 40)],
-	],
-	2: [
-		[EnemyScene,        Vector2(90, 60)],
-		[EnemyFleerScene,   Vector2(390, 60)],
-		[EnemyFleerScene,   Vector2(90, 210)],
-		[EnemyPhaserScene,  Vector2(400, 210)],
-		[EnemyPhaserScene,  Vector2(240, 50)],
-		[EnemyScene,        Vector2(240, 230)],
-	],
-	3: [
-		[EnemyScene,        Vector2(80, 50)],
-		[EnemyPhaserScene,  Vector2(400, 50)],
-		[EnemyPhaserScene,  Vector2(80, 220)],
-		[EnemyFleerScene,   Vector2(400, 220)],
-		[EnemyScene,        Vector2(240, 40)],
-	],
-	4: [
-		[EnemyScene,        Vector2(90, 60)],
-		[EnemyPhaserScene,  Vector2(390, 60)],
-		[EnemyFleerScene,   Vector2(90, 210)],
-		[EnemyPhaserScene,  Vector2(400, 210)],
-		[EnemyFleerScene,   Vector2(240, 50)],
-		[EnemyScene,        Vector2(240, 230)],
-	],
-	5: [
-		[EnemyPhaserScene,  Vector2(90, 60)],
-		[EnemyPhaserScene,  Vector2(390, 60)],
-		[EnemyFleerScene,   Vector2(90, 210)],
-		[EnemyFleerScene,   Vector2(390, 210)],
-		[EnemyPhaserScene,  Vector2(240, 45)],
-		[EnemyScene,        Vector2(150, 135)],
-		[EnemyScene,        Vector2(330, 135)],
-	],
+# Per-ring enemy TYPE MIX (sampled per spawn). At explore-scale the old fixed
+# single-screen positions would all clump near SIM_ORIGIN, so spawns are now
+# scattered procedurally across the SimSpace box (see _spawn_enemies) in pockets
+# the warrior finds while exploring. Each ring keeps its character through the mix
+# (Ring 1 grunt-heavy, Ring 5 phaser-heavy) and through its terrain/palette; the
+# bounds stay universal. Missing keys fall back to Ring 1.
+const SPAWN_MIX := {
+	1: [EnemyScene, EnemyScene, EnemyScene, EnemyFleerScene, EnemyPhaserScene],
+	2: [EnemyScene, EnemyScene, EnemyFleerScene, EnemyFleerScene, EnemyPhaserScene],
+	3: [EnemyScene, EnemyPhaserScene, EnemyPhaserScene, EnemyFleerScene],
+	4: [EnemyScene, EnemyPhaserScene, EnemyFleerScene, EnemyFleerScene, EnemyPhaserScene],
+	5: [EnemyPhaserScene, EnemyPhaserScene, EnemyFleerScene, EnemyScene],
 }
+
+# Enemy pockets scattered across the arena. Counts scale with the play area so the
+# bigger box stays a fight rather than an empty walk; each pocket is a small cluster
+# the warrior clears as they sweep the ring.
+const POCKETS_PER_RING := 7        # cluster count, spread across the box
+const PER_POCKET := Vector2i(2, 4) # min..max enemies per cluster
+const POCKET_RADIUS := 90.0        # px spread within a cluster
+const HOME_SAFE_RADIUS := 260.0    # px around the summon point kept clear of spawns
+const SPAWN_MARGIN := 140.0        # px inset from the walls so nothing spawns in a corner
 
 var _rig: IsoRig
 var _world: Node3D       # the current ring's terrain builder (RingNWorld)
@@ -71,6 +48,12 @@ var _enemies_alive := 0
 var _run_ended := false
 
 func _ready() -> void:
+	# --- Walls: rebuild the boundary box from the shared SimSpace bounds, so the
+	# arena size is the single PLAY_SCALE knob (the .tscn's legacy 480x270 box is
+	# replaced at runtime). Symmetric about SIM_ORIGIN, so the warrior start + all
+	# spawns stay put and only the extents grow. ---
+	_rebuild_walls()
+
 	# --- 3D presentation rig: scene owns it, configures it per ring, mounts ----
 	# the selected ring's terrain builder directly. Per-ring palette/environment
 	# must be set BEFORE add_child (the rig builds its pipeline lazily on _ready
@@ -114,6 +97,35 @@ func _ready() -> void:
 	if GameState.is_last_song():
 		$HUD.show_status("LAST SONG", Color("#C4547A"))
 	_spawn_enemies()
+
+
+# Replace the boundary walls with a box derived from SimSpace.box_min/max_px(), so
+# the playable arena tracks the one PLAY_SCALE knob. Four thick StaticBody2D-child
+# rectangles just outside each edge; the warrior's CharacterBody2D collides with them.
+func _rebuild_walls() -> void:
+	var walls := $Walls as StaticBody2D
+	for c in walls.get_children():
+		c.queue_free()
+	var lo := SimSpace.box_min_px()
+	var hi := SimSpace.box_max_px()
+	var centre := SimSpace.SIM_ORIGIN
+	var w := hi.x - lo.x
+	var h := hi.y - lo.y
+	var t := 20.0  # wall thickness (px)
+	var specs := [
+		["Left",   Vector2(lo.x - t * 0.5, centre.y), Vector2(t, h + 2.0 * t)],
+		["Right",  Vector2(hi.x + t * 0.5, centre.y), Vector2(t, h + 2.0 * t)],
+		["Top",    Vector2(centre.x, lo.y - t * 0.5), Vector2(w + 2.0 * t, t)],
+		["Bottom", Vector2(centre.x, hi.y + t * 0.5), Vector2(w + 2.0 * t, t)],
+	]
+	for s in specs:
+		var cs := CollisionShape2D.new()
+		cs.name = s[0]
+		cs.position = s[1]
+		var rect := RectangleShape2D.new()
+		rect.size = s[2]
+		cs.shape = rect
+		walls.add_child(cs)
 
 
 # Instantiate the terrain builder for a ring (Node3D with build(rig); rings 2+ also
@@ -178,12 +190,30 @@ func _on_run_cleared() -> void:
 
 func _spawn_enemies() -> void:
 	var last_song := GameState.is_last_song()
-	var spawns: Array = SPAWNS.get(GameState.current_ring, SPAWNS[1])
-	for s in spawns:
-		var e := (s[0] as PackedScene).instantiate() as EnemyBase
-		add_child(e)
-		e.global_position = s[1]
-		e.enemy_died.connect(_on_enemy_died)
-		_enemies_alive += 1
-		if last_song:
-			e.force_amplify()
+	var mix: Array = SPAWN_MIX.get(GameState.current_ring, SPAWN_MIX[1])
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1000 + GameState.current_ring  # deterministic layout per ring
+	var lo := SimSpace.box_min_px() + Vector2(SPAWN_MARGIN, SPAWN_MARGIN)
+	var hi := SimSpace.box_max_px() - Vector2(SPAWN_MARGIN, SPAWN_MARGIN)
+	for p in range(POCKETS_PER_RING):
+		# A cluster centre somewhere in the inset box, clear of the summon point.
+		var centre := Vector2.ZERO
+		for _try in range(20):
+			centre = Vector2(rng.randf_range(lo.x, hi.x), rng.randf_range(lo.y, hi.y))
+			if centre.distance_to(SimSpace.SIM_ORIGIN) >= HOME_SAFE_RADIUS:
+				break
+		var count := rng.randi_range(PER_POCKET.x, PER_POCKET.y)
+		for i in range(count):
+			var pos := centre + Vector2(
+				rng.randf_range(-POCKET_RADIUS, POCKET_RADIUS),
+				rng.randf_range(-POCKET_RADIUS, POCKET_RADIUS)
+			).limit_length(POCKET_RADIUS)
+			pos = pos.clamp(lo, hi)
+			var scene := mix[rng.randi_range(0, mix.size() - 1)] as PackedScene
+			var e := scene.instantiate() as EnemyBase
+			add_child(e)
+			e.global_position = pos
+			e.enemy_died.connect(_on_enemy_died)
+			_enemies_alive += 1
+			if last_song:
+				e.force_amplify()

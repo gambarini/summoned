@@ -105,18 +105,21 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 44  # Ring 4's own scatter seed (1=7, 2=12, 3=31)
+	# Walkable half-extents from the shared arena knob (SimSpace.PLAY_SCALE).
+	var half := SimSpace.half_world()
 
 	# --- The canyon void below: a large deep-warm plane so far edges fade to rust
 	# haze instead of a hole. ---
 	var land := CSGBox3D.new()
-	land.size = Vector3(300.0, 2.0, 300.0)
+	var land_span := maxf(300.0, (maxf(half.x, half.y) + 90.0) * 2.0)
+	land.size = Vector3(land_span, 2.0, land_span)
 	land.position = Vector3(0.0, -6.0, 0.0)
 	land.material = _mat(COL_VOID)
 	add_child(land)
 
-	# --- Main walkable plateau (28 x 22, universal footprint) — the lit sandy floor ---
+	# --- Main walkable plateau (covers the full reachable footprint +-half) — sandy floor ---
 	var plateau := CSGBox3D.new()
-	plateau.size = Vector3(28.0, 1.0, 22.0)
+	plateau.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
 	plateau.material = _mat(COL_GROUND)
 	add_child(plateau)
@@ -181,6 +184,12 @@ func _build_terrain() -> void:
 	# --- A couple of plank bridges crossing the channels at the periphery. ---
 	add_child(_make_bridge(Vector3(-13.5, 0.5, -3.0), 6.0, 12.0))
 	add_child(_make_bridge(Vector3(13.0, 0.5, 9.0), 5.0, -70.0))
+
+	# === EXPANSE FILL: the authored centre is the hub; populate the larger canyon
+	# floor with graduated-density rose flora/rubble + outlying canyon structures as
+	# explore destinations. ===
+	_fill_expanse(half)
+	_add_outlying_landmarks(half)
 
 
 # The Shaper mechanism: a dark sunken disc, a gold concentric ring with radial
@@ -343,3 +352,52 @@ func _make_flora_spike(pos: Vector3, height: float, rng: RandomNumberGenerator) 
 		bud.position = Vector3(0.0, height * 0.95, 0.0)
 		stalk.add_child(bud)
 	return stalk
+
+
+# World radius of the authored central area, kept clear by the expanse fill.
+const HUB := 13.0
+
+
+# Graduated-density scatter across the canyon floor (warm). Own RNG (seed 45) so the
+# authored seed-44 layout is byte-for-byte unchanged.
+func _fill_expanse(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 45
+	var area := half.x * half.y
+	for n in range(clampi(int(area * 0.025), 20, 80)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_flora_cluster(p, rng))
+	for n in range(clampi(int(area * 0.07), 50, 240)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_flora_spike(p, rng.randf_range(0.5, 1.6), rng))
+	for n in range(clampi(int(area * 0.03), 24, 100)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p == Vector3.INF:
+			continue
+		var sz := rng.randf_range(0.3, 0.8)
+		var chunk := _box(Vector3(sz, sz * 0.7, sz), COL_WALL if n % 2 == 0 else COL_WALL_DARK)
+		chunk.position = p + Vector3(0.0, sz * 0.35, 0.0)
+		chunk.rotation_degrees = Vector3(rng.randf_range(-10.0, 10.0), rng.randf_range(0.0, 90.0), rng.randf_range(-10.0, 10.0))
+		add_child(chunk)
+
+
+# Outlying canyon structures (walls / bridges with flora / one drained canal) so the
+# reach has destinations.
+func _add_outlying_landmarks(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 53
+	var ring_r := minf(half.x, half.y)
+	for i in range(5):
+		var ang := TAU * float(i) / 5.0 + rng.randf_range(-0.3, 0.3)
+		var r := ring_r * rng.randf_range(0.5, 0.85)
+		var pos := Vector3(cos(ang) * r, 0.0, sin(ang) * r)
+		var kind := i % 3
+		if kind == 0:
+			add_child(_make_canyon_wall(pos + Vector3(0.0, -1.0, 0.0), rng.randf_range(0.0, 360.0), rng))
+		elif kind == 1:
+			add_child(_make_bridge(pos + Vector3(0.0, 0.5, 0.0), rng.randf_range(5.0, 8.0), rng.randf_range(0.0, 180.0)))
+			add_child(_make_flora_cluster(pos + Vector3(0.0, 0.5, 0.0), rng))
+		else:
+			add_child(_make_drain(pos, Vector2(rng.randf_range(5.0, 8.0), rng.randf_range(4.0, 6.0))))

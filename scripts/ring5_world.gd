@@ -105,18 +105,21 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 55  # Ring 5's own scatter seed (1=7, 2=12, 3=31, 4=44)
+	# Walkable half-extents from the shared arena knob (SimSpace.PLAY_SCALE).
+	var half := SimSpace.half_world()
 
 	# --- Surrounding lowland: a large dark cold plane so far edges fade into grey
-	# haze instead of a void. ---
+	# haze instead of a void. Sized well beyond the plaza. ---
 	var land := CSGBox3D.new()
-	land.size = Vector3(300.0, 2.0, 300.0)
+	var land_span := maxf(300.0, (maxf(half.x, half.y) + 90.0) * 2.0)
+	land.size = Vector3(land_span, 2.0, land_span)
 	land.position = Vector3(0.0, -2.4, 0.0)
 	land.material = _mat(COL_GROUND_DARK)
 	add_child(land)
 
-	# --- Main walkable plaza (28 x 22, universal footprint) — the lit cool stage ---
+	# --- Main walkable plaza (covers the full reachable footprint +-half) — cool stage ---
 	var plaza := CSGBox3D.new()
-	plaza.size = Vector3(28.0, 1.0, 22.0)
+	plaza.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plaza.position = Vector3(0.0, 0.0, 0.0)
 	plaza.material = _mat(COL_PLAZA)
 	add_child(plaza)
@@ -186,6 +189,12 @@ func _build_terrain() -> void:
 		var glint := _box(Vector3(0.3, 0.5, 0.3), COL_PALE)
 		glint.position = pos
 		add_child(glint)
+
+	# === EXPANSE FILL: the authored plaza is the hub; populate the larger garden with
+	# graduated-density grey roses/rubble + outlying ruins/hedges as explore
+	# destinations (cold, formal, thinning toward the still haze). ===
+	_fill_expanse(half)
+	_add_outlying_landmarks(half)
 
 
 # The central altar: a low tiered violet base + a ring of inward-LEANING buttress
@@ -322,3 +331,50 @@ func _make_ruin(base_pos: Vector3, yaw_deg: float, rng: RandomNumberGenerator) -
 			cap.position = Vector3(-count * 0.8 + i * 1.6, h, 0.0)
 			ruin.add_child(cap)
 	return ruin
+
+
+# World radius of the authored central plaza, kept clear by the expanse fill.
+const HUB := 13.0
+
+
+# Graduated-density scatter across the garden (cold, formal). Own RNG (seed 57) so the
+# authored seed-55 layout is byte-for-byte unchanged.
+func _fill_expanse(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 57
+	var area := half.x * half.y
+	for n in range(clampi(int(area * 0.025), 20, 80)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_rose_cluster(p, rng))
+	for n in range(clampi(int(area * 0.06), 40, 200)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_rose_bush(p, rng.randf_range(0.5, 1.0), rng))
+	for n in range(clampi(int(area * 0.025), 20, 90)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p == Vector3.INF:
+			continue
+		var sz := rng.randf_range(0.3, 0.7)
+		var chunk := _box(Vector3(sz, sz * 0.7, sz), COL_STONE if n % 2 == 0 else COL_RUIN_DARK)
+		chunk.position = p + Vector3(0.0, sz * 0.35, 0.0)
+		chunk.rotation_degrees = Vector3(rng.randf_range(-8.0, 8.0), rng.randf_range(0.0, 90.0), rng.randf_range(-8.0, 8.0))
+		add_child(chunk)
+
+
+# Outlying ruins / hedges / rose beds out in the garden so the reach has destinations.
+func _add_outlying_landmarks(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 59
+	var ring_r := minf(half.x, half.y)
+	for i in range(6):
+		var ang := TAU * float(i) / 6.0 + rng.randf_range(-0.25, 0.25)
+		var r := ring_r * rng.randf_range(0.5, 0.85)
+		var pos := Vector3(cos(ang) * r, 0.5, sin(ang) * r)
+		var kind := i % 3
+		if kind == 0:
+			add_child(_make_ruin(pos + Vector3(0.0, -1.0, 0.0), rng.randf_range(0.0, 180.0), rng))
+		elif kind == 1:
+			add_child(_make_hedge(pos, rng.randf_range(5.0, 9.0), rng.randf_range(0.0, 180.0)))
+		else:
+			add_child(_make_rose_cluster(pos, rng))

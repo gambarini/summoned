@@ -30,6 +30,56 @@ class_name SimSpace
 const PIXELS_PER_UNIT := 18.0
 const SIM_ORIGIN := Vector2(240.0, 135.0)  # 2D play-area centre -> world origin
 
+# --- Play-area size (the one knob) ---------------------------------------
+## Arena multiplier vs the original 480x270 sim box. 1.0 = the legacy single-screen
+## arena; >1 grows the playable box symmetrically about SIM_ORIGIN so existing
+## spawns + the world-centred terrain stay put and only the extents widen. 4.0 is
+## the "explore-scale" arena: ~1920x1080 sim px -> ~+-53 x +-30 world units, a space
+## the follow camera scrolls across (warrior size/speed are unchanged). The walls
+## (main.gd), enemy spawn spread (main.gd), and every ring's terrain extent read
+## this through the helpers below -- never hardcode the box size in those files.
+const PLAY_SCALE := 4.0
+## Half-size of the ORIGINAL 480x270 box (its centre is SIM_ORIGIN).
+const _BASE_HALF_PX := Vector2(240.0, 135.0)
+
+
+## Play-area half-extents in sim px (SIM_ORIGIN +- this is the wall box).
+static func half_px() -> Vector2:
+	return _BASE_HALF_PX * PLAY_SCALE
+
+
+## Play-area half-extents in WORLD units -- terrain builders size the walkable
+## ground to cover at least this (plus a margin) so the warrior never walks off it.
+static func half_world() -> Vector2:
+	return half_px() / PIXELS_PER_UNIT
+
+
+## Wall box corners in sim px.
+static func box_min_px() -> Vector2:
+	return SIM_ORIGIN - half_px()
+
+
+static func box_max_px() -> Vector2:
+	return SIM_ORIGIN + half_px()
+
+
+## A scatter point for graduated-density terrain fill: a random point inside +-half
+## (world units, small inset) accepted with probability that falls off with distance
+## from centre -- dense near `hub_radius`, sparse at the rim. Returns Vector3.INF when
+## rejected, and always rejects inside `hub_radius` (the authored central hub). y is
+## 0.5 (the plateau top). Shared by every ring builder's expanse fill.
+static func scatter_point(rng: RandomNumberGenerator, half: Vector2, hub_radius: float) -> Vector3:
+	var x := rng.randf_range(-half.x + 0.5, half.x - 0.5)
+	var z := rng.randf_range(-half.y + 0.5, half.y - 0.5)
+	var d := Vector2(x, z).length()
+	if d < hub_radius:
+		return Vector3.INF
+	var max_d := half.length()
+	var t := clampf(1.0 - (d - hub_radius) / maxf(1.0, max_d - hub_radius), 0.15, 1.0)
+	if rng.randf() > t:
+		return Vector3.INF
+	return Vector3(x, 0.5, z)
+
 
 ## Sim px -> world units. `height` is the 3D Y (presentation-only "hover").
 static func to_world(sim: Vector2, height: float) -> Vector3:

@@ -1,5 +1,15 @@
 # Migration Plan — 2D Top-Down → Low-Res 3D Isometric
 
+> ⚠️ **Superseded numbers (2026-06-21):** this doc's play-area bounds — the `480×270`
+> wall box, the `28×22` plateau, the `x∈[−13.0,13.0] z∈[−6.94,6.94]` footprint, and
+> the per-ring `main.SPAWNS` table — describe the original single-screen arena. They
+> are now the `PLAY_SCALE = 1.0` case. Arena size is a single knob,
+> `SimSpace.PLAY_SCALE` (currently 4 = explore-scale); walls, enemy pocket-spawns, and
+> every ring's terrain derive from `SimSpace.half_world()`. The `base` is now a 3D
+> villa (`villa_world.gd`), not a 2D diorama. See memory `explore_scale_and_villa.md`.
+> The pipeline/resolution facts below (PPU=18, render sizes, the cel/post chain) are
+> still current.
+
 > Status: **Phases 0–4 + all of Phase 2b done** (2026-06-17) — the Ring 1 run loop plays in
 > low-res 3D end-to-end (`main.tscn` = rig + terrain + synced warrior/enemy/arc billboards, 2D
 > HUD on top, `game_state.gd` unchanged), and the warrior's **full visual identity** now reads in

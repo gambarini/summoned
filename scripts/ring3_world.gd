@@ -82,17 +82,20 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 31  # Ring 3's own scatter seed
+	# Walkable half-extents from the shared arena knob (SimSpace.PLAY_SCALE).
+	var half := SimSpace.half_world()
 
 	# --- The void below: a large deep-violet plane so far edges fade to haze. ---
 	var land := CSGBox3D.new()
-	land.size = Vector3(300.0, 2.0, 300.0)
+	var land_span := maxf(300.0, (maxf(half.x, half.y) + 90.0) * 2.0)
+	land.size = Vector3(land_span, 2.0, land_span)
 	land.position = Vector3(0.0, -6.0, 0.0)
 	land.material = _mat(COL_LOWLAND)
 	add_child(land)
 
-	# --- Main elevated plateau (28 x 22, universal footprint) ---
+	# --- Main elevated plateau (covers the full reachable footprint +-half) ---
 	var plateau := CSGBox3D.new()
-	plateau.size = Vector3(28.0, 1.0, 22.0)
+	plateau.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
 	plateau.material = _mat(COL_GROUND)
 	add_child(plateau)
@@ -129,6 +132,12 @@ func _build_terrain() -> void:
 		if absf(pos.x) < 4.0 and absf(pos.z) < 4.0:
 			continue
 		add_child(_make_frost_tuft(pos, rng))
+
+	# === EXPANSE FILL: the authored centre is the hub; populate the larger reach with
+	# graduated-density frost/monoliths (sparse — the Canopy is cold) + outlying
+	# landmarks as explore destinations. ===
+	_fill_expanse(half)
+	_add_outlying_landmarks(half)
 
 
 func _make_glyph_array(pos: Vector3) -> Node3D:
@@ -210,3 +219,50 @@ func _make_frost_tuft(pos: Vector3, rng: RandomNumberGenerator) -> Node3D:
 		)
 		tuft.add_child(blade)
 	return tuft
+
+
+# World radius of the authored central area, kept clear by the expanse fill.
+const HUB := 13.0
+
+
+# Graduated-density scatter across the plateau (cold + sparse). Own RNG (seed 41) so
+# the authored seed-31 layout is byte-for-byte unchanged.
+func _fill_expanse(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 41
+	var area := half.x * half.y
+	for n in range(clampi(int(area * 0.05), 40, 200)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_frost_tuft(p, rng))
+	for n in range(clampi(int(area * 0.01), 8, 44)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_monolith(p, rng.randf_range(4.0, 8.0), rng))
+	for n in range(clampi(int(area * 0.02), 16, 80)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p == Vector3.INF:
+			continue
+		var sz := rng.randf_range(0.3, 0.7)
+		var chunk := _box(Vector3(sz, sz * 0.6, sz), COL_STONE if n % 2 == 0 else COL_STONE_DARK)
+		chunk.position = p + Vector3(0.0, sz * 0.3, 0.0)
+		chunk.rotation_degrees = Vector3(rng.randf_range(-10.0, 10.0), rng.randf_range(0.0, 90.0), rng.randf_range(-10.0, 10.0))
+		add_child(chunk)
+
+
+# A few monoliths / sunken terraces / glyph arrays out in the reach as destinations.
+func _add_outlying_landmarks(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 47
+	var ring_r := minf(half.x, half.y)
+	for i in range(5):
+		var ang := TAU * float(i) / 5.0 + rng.randf_range(-0.3, 0.3)
+		var r := ring_r * rng.randf_range(0.5, 0.85)
+		var pos := Vector3(cos(ang) * r, 0.5, sin(ang) * r)
+		var kind := i % 3
+		if kind == 0:
+			add_child(_make_monolith(pos, rng.randf_range(6.0, 10.0), rng))
+		elif kind == 1:
+			add_child(_make_subplateau(pos + Vector3(0.0, -2.0, 0.0), Vector3(rng.randf_range(7.0, 11.0), 1.0, rng.randf_range(7.0, 11.0))))
+		else:
+			add_child(_make_glyph_array(pos + Vector3(0.0, 0.02, 0.0)))

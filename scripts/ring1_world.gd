@@ -93,14 +93,19 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
+	# Walkable half-extents (world units) from the shared arena knob (SimSpace.
+	# PLAY_SCALE). All terrain extents derive from this, so the ground always covers
+	# the warrior's reachable footprint at any PLAY_SCALE (was a fixed 28x22 plateau).
+	var half := SimSpace.half_world()
 
-	# --- Surrounding lowland: a large plane so terrain fills the frame at any
-	# camera angle and fades into pale haze instead of a void. ---
+	# --- Surrounding lowland: a large flat plane that recedes into pale haze instead
+	# of a void. Sized well beyond the plateau so its edge always drops into distance,
+	# even at large PLAY_SCALE. ---
 	var land := CSGBox3D.new()
-	land.size = Vector3(300.0, 2.0, 300.0)
+	var land_span := maxf(300.0, (maxf(half.x, half.y) + 90.0) * 2.0)
+	land.size = Vector3(land_span, 2.0, land_span)
 	land.position = Vector3(0.0, -2.6, 0.0)
-	# Lowland stays FLAT: a 300u backdrop tiles the texture ~120x into an obvious
-	# grid. Its job is to recede into haze (fog + vignette do that), so flat is right.
+	# Lowland stays FLAT: its job is to recede into haze (fog + vignette do that).
 	land.material = _mat(COL_GROUND_LOW)
 	add_child(land)
 
@@ -112,7 +117,9 @@ func _build_terrain() -> void:
 	# ground margin. Depth (z) already has ~4u of slack (warrior reaches z=+-6.94 vs
 	# the +-11 plateau), so only x needs the nudge. See MIGRATION_3D Phase 5.
 	var plateau := CSGBox3D.new()
-	plateau.size = Vector3(28.0, 1.0, 22.0)
+	# Cover the full reachable footprint (+-half) with ~1u margin each side so the
+	# warrior never teeters on the lip.
+	plateau.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
 	plateau.material = _tex_mat(GROUND_TEX, Color.WHITE, GROUND_SCALE)
 	add_child(plateau)
@@ -127,20 +134,9 @@ func _build_terrain() -> void:
 		patch.rotation_degrees.y = rng.randf_range(0.0, 90.0)
 		add_child(patch)
 
-	# --- Stratified cliff descending off the front-left edge ---
-	for i in range(3):
-		var w := 10.0 - i * 2.0
-		var base_y := -1.0 - i * 1.2
-		var step := CSGBox3D.new()
-		step.size = Vector3(w, 1.0, 6.0)
-		step.position = Vector3(-9.0 - i * 1.5, base_y, 8.0 + i * 1.0)
-		step.material = _tex_mat(GROUND_TEX, _tint_for(COL_GROUND_LOW.lerp(COL_FOG, i * 0.2), COL_GROUND), GROUND_SCALE)
-		add_child(step)
-		# Rock strata: thin darker bands on the cliff face.
-		for s in range(2):
-			var band := _box(Vector3(w + 0.1, 0.18, 6.1), COL_STONE_DARK.lerp(COL_FOG, i * 0.25))
-			band.position = Vector3(-9.0 - i * 1.5, base_y - 0.25 - s * 0.4, 8.0 + i * 1.0)
-			add_child(band)
+	# --- Stratified cliff descending off the plateau's front edge (relocated to the
+	# real perimeter at explore-scale; was the old +-12 edge). ---
+	_add_cliff(Vector3(-half.x * 0.45, 0.0, half.y - 1.0))
 
 	# --- Carved stairway up the plateau edge (front) ---
 	add_child(_make_stairs(Vector3(5.5, 0.5, 9.5), 5))
@@ -215,6 +211,12 @@ func _build_terrain() -> void:
 		chunk2.position = Vector3(rng2.randf_range(-10.0, 10.0), 0.5 + s2 * 0.3, rng2.randf_range(-8.0, 8.0))
 		chunk2.rotation_degrees = Vector3(rng2.randf_range(-12.0, 12.0), rng2.randf_range(0.0, 90.0), rng2.randf_range(-12.0, 12.0))
 		add_child(chunk2)
+
+	# === EXPANSE FILL: the home hub above is dense; now populate the much larger
+	# reach out to the edges with graduated-density flora/debris (thinning toward the
+	# haze) plus a few outlying ruins as explore landmarks. ===
+	_fill_expanse(half)
+	_add_outlying_landmarks(half)
 
 
 # Central walkable band kept clear so enemy/warrior signals stay legible.
@@ -394,3 +396,98 @@ func _make_arch(base_pos: Vector3) -> Node3D:
 	stub.rotation_degrees.z = 8.0
 	arch.add_child(stub)
 	return arch
+
+
+# World radius of the authored central camp, kept clear by the expanse fill so the
+# hand-composed hub and the procedural reach don't double up.
+const HUB := 13.0
+
+
+# Stratified cliff descending off a plateau edge, built relative to `origin` (was an
+# inline block at the old +-12 edge; now placed at the real perimeter so it reads as
+# the mesa falling away into haze).
+func _add_cliff(origin: Vector3) -> void:
+	for i in range(4):
+		var w := 12.0 - i * 2.0
+		var base_y := -1.0 - i * 1.2
+		var step := CSGBox3D.new()
+		step.size = Vector3(w, 1.0, 6.0)
+		step.position = origin + Vector3(-i * 1.2, base_y, i * 2.0)
+		step.material = _tex_mat(GROUND_TEX, _tint_for(COL_GROUND_LOW.lerp(COL_FOG, i * 0.2), COL_GROUND), GROUND_SCALE)
+		add_child(step)
+		for s in range(2):
+			var band := _box(Vector3(w + 0.1, 0.18, 6.1), COL_STONE_DARK.lerp(COL_FOG, i * 0.25))
+			band.position = origin + Vector3(-i * 1.2, base_y - 0.25 - s * 0.4, i * 2.0)
+			add_child(band)
+
+
+# Graduated-density scatter across the plateau: dense just outside the home hub,
+# thinning to sparse at the rim so the reach fades into haze rather than ending in a
+# hard prop wall. Budgets scale with area but are capped so node count (FPS) stays
+# sane. Own RNG (seed 21) so the hub's seed-7/13 layout is byte-for-byte unchanged.
+func _fill_expanse(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 21
+	var area := half.x * half.y
+	for n in range(clampi(int(area * 0.12), 80, 380)):
+		var p := _expanse_point(rng, half)
+		if p != Vector3.INF:
+			add_child(_make_grass_tuft(p, rng))
+	for n in range(clampi(int(area * 0.04), 30, 130)):
+		var p := _expanse_point(rng, half)
+		if p != Vector3.INF:
+			add_child(_make_reed(p, rng))
+	for n in range(clampi(int(area * 0.03), 20, 100)):
+		var p := _expanse_point(rng, half)
+		if p != Vector3.INF:
+			add_child(_make_flower(p, rng))
+	for n in range(clampi(int(area * 0.04), 30, 130)):
+		var p := _expanse_point(rng, half)
+		if p == Vector3.INF:
+			continue
+		var sz := rng.randf_range(0.3, 0.7)
+		var chunk := _box(Vector3(sz, sz * 0.6, sz), COL_STONE_DARK if n % 2 == 0 else COL_STONE)
+		chunk.position = p + Vector3(0.0, sz * 0.3, 0.0)
+		chunk.rotation_degrees = Vector3(rng.randf_range(-12.0, 12.0), rng.randf_range(0.0, 90.0), rng.randf_range(-12.0, 12.0))
+		add_child(chunk)
+
+
+# A candidate scatter point inside +-half (small inset), accepted with probability
+# that falls off with distance from centre (dense near the hub, sparse at the rim).
+# Rejects the authored hub footprint and returns Vector3.INF when rejected.
+func _expanse_point(rng: RandomNumberGenerator, half: Vector2) -> Vector3:
+	var x := rng.randf_range(-half.x + 0.5, half.x - 0.5)
+	var z := rng.randf_range(-half.y + 0.5, half.y - 0.5)
+	var d := Vector2(x, z).length()
+	if d < HUB:
+		return Vector3.INF
+	var max_d := half.length()
+	var t := clampf(1.0 - (d - HUB) / maxf(1.0, max_d - HUB), 0.15, 1.0)
+	if rng.randf() > t:
+		return Vector3.INF
+	return Vector3(x, 0.5, z)
+
+
+# A few ruins out in the reach (beyond the hub, clear of the rim) so exploration has
+# destinations: a dome on the horizon to walk toward. Reuses the hub's ruin makers.
+func _add_outlying_landmarks(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 29
+	var ring_r := minf(half.x, half.y)
+	var count := 5
+	for i in range(count):
+		var ang := TAU * float(i) / float(count) + rng.randf_range(-0.3, 0.3)
+		var r := ring_r * rng.randf_range(0.5, 0.85)
+		var pos := Vector3(cos(ang) * r, 0.5, sin(ang) * r)
+		var kind := i % 3
+		if kind == 0:
+			add_child(_make_domed_ruin(pos, rng.randf_range(1.6, 2.6), rng.randf() < 0.5))
+		elif kind == 1:
+			add_child(_make_arch(pos))
+		else:
+			for s in range(rng.randi_range(3, 5)):
+				var h := rng.randf_range(2.0, 4.0)
+				var stone := _box(Vector3(rng.randf_range(0.6, 1.0), h, rng.randf_range(0.6, 1.0)), COL_STONE_DARK)
+				stone.position = pos + Vector3(rng.randf_range(-2.5, 2.5), h * 0.5 - 0.5, rng.randf_range(-2.5, 2.5))
+				stone.rotation_degrees = Vector3(rng.randf_range(-6.0, 6.0), rng.randf_range(0.0, 90.0), rng.randf_range(-6.0, 6.0))
+				add_child(stone)

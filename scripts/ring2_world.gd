@@ -106,18 +106,22 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 12  # Ring 2's own scatter seed (Ring 1 uses 7)
+	# Walkable half-extents from the shared arena knob (SimSpace.PLAY_SCALE); all
+	# terrain extents derive from it so the ground covers the warrior's reach.
+	var half := SimSpace.half_world()
 
 	# --- Surrounding lowland: large dark plane so the frame fills and fades into
-	# indigo haze instead of a void. ---
+	# indigo haze instead of a void. Sized well beyond the plateau. ---
 	var land := CSGBox3D.new()
-	land.size = Vector3(300.0, 2.0, 300.0)
+	var land_span := maxf(300.0, (maxf(half.x, half.y) + 90.0) * 2.0)
+	land.size = Vector3(land_span, 2.0, land_span)
 	land.position = Vector3(0.0, -2.6, 0.0)
 	land.material = _mat(COL_LOWLAND)
 	add_child(land)
 
-	# --- Plateau the path crosses (28 x 22, same universal footprint as Ring 1) ---
+	# --- Plateau the path crosses (covers the full reachable footprint +-half) ---
 	var plateau := CSGBox3D.new()
-	plateau.size = Vector3(28.0, 1.0, 22.0)
+	plateau.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
 	plateau.material = _mat(COL_GROUND)
 	add_child(plateau)
@@ -177,7 +181,13 @@ func _build_terrain() -> void:
 	# --- A distant Watcher outpost silhouette (far back-right, outside the play
 	# area). Pushed well out so it stays a background silhouette and doesn't loom
 	# into the near foreground when the camera orbits past it. ---
-	add_child(_make_outpost(Vector3(26.0, 0.5, -22.0)))
+	add_child(_make_outpost(Vector3(half.x * 0.7, 0.5, -half.y * 0.8)))
+
+	# === EXPANSE FILL: the authored camp above is the dense hub; populate the larger
+	# reach out to the edges with graduated-density flora/rubble (thinning toward the
+	# haze) plus a few outlying ruins as explore landmarks. ===
+	_fill_expanse(half)
+	_add_outlying_landmarks(half)
 
 
 func _make_flora_cluster(pos: Vector3, rng: RandomNumberGenerator) -> Node3D:
@@ -293,3 +303,51 @@ func _make_outpost(base_pos: Vector3) -> Node3D:
 		tower.position = (offs[i] as Vector3) + Vector3(0.0, h * 0.5, 0.0)
 		outpost.add_child(tower)
 	return outpost
+
+
+# World radius of the authored central camp, kept clear by the expanse fill.
+const HUB := 13.0
+
+
+# Graduated-density scatter across the plateau using the Singing Lands' own props:
+# dense just outside the hub, thinning to sparse at the rim. Own RNG (seed 23) so the
+# hub's seed-12 layout is byte-for-byte unchanged.
+func _fill_expanse(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 23
+	var area := half.x * half.y
+	for n in range(clampi(int(area * 0.03), 24, 90)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_flora_cluster(p, rng))
+	for n in range(clampi(int(area * 0.08), 60, 260)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p != Vector3.INF:
+			add_child(_make_flora_spike(p, rng.randf_range(0.5, 1.8), rng))
+	for n in range(clampi(int(area * 0.03), 24, 100)):
+		var p := SimSpace.scatter_point(rng, half, HUB)
+		if p == Vector3.INF:
+			continue
+		var sz := rng.randf_range(0.3, 0.8)
+		var chunk := _box(Vector3(sz, sz * 0.7, sz), COL_STONE if n % 2 == 0 else COL_STONE_DARK)
+		chunk.position = p + Vector3(0.0, sz * 0.35, 0.0)
+		chunk.rotation_degrees = Vector3(rng.randf_range(-10.0, 10.0), rng.randf_range(0.0, 90.0), rng.randf_range(-10.0, 10.0))
+		add_child(chunk)
+
+
+# A few Singer ruins out in the reach so exploration has destinations.
+func _add_outlying_landmarks(half: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 31
+	var ring_r := minf(half.x, half.y)
+	for i in range(5):
+		var ang := TAU * float(i) / 5.0 + rng.randf_range(-0.3, 0.3)
+		var r := ring_r * rng.randf_range(0.5, 0.85)
+		var pos := Vector3(cos(ang) * r, 0.5, sin(ang) * r)
+		var kind := i % 3
+		if kind == 0:
+			add_child(_make_ruined_wall(pos, rng.randf_range(5.0, 9.0), rng.randf_range(0.0, 180.0)))
+		elif kind == 1:
+			add_child(_make_arch(pos))
+		else:
+			add_child(_make_glow_shrine(pos))
