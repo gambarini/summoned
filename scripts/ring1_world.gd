@@ -26,7 +26,29 @@ const COL_PALE := Color("cbd2d3")
 const COL_DOORWAY := Color("c89a5e")    # warm pinpoint (concept doorway)
 const COL_FOG := Color("5a697d")        # measured sky/haze (used in distance lerps)
 
+# Tiling pixel-art textures (cel_triplanar, world-space). Authored at measured
+# Ring 1 values; per-surface tint scales them to same-hue variants. One scale per
+# family keeps texel density consistent across objects. See memory look_match_spike.
+const STONE_TEX := "res://assets/textures/stone_pale.png"
+const STONE_SCALE := 0.32   # tiles/world-unit for ALL stone (constant block size)
+const GROUND_TEX := "res://assets/textures/ground_tile.png"
+const GROUND_SCALE := 0.4    # one scale for ALL ground/path
+
 var _rig: IsoRig
+
+
+## Reconfigure the rig's environment for the Pale Reaches atmosphere pass: the
+## world dissolves into pale haze at distance and the near-white ambient fill
+## drops so the key light + fog model the dusk, instead of the flat-lit "diamond
+## floating on grey" read. Proven in the look-match spike (memory look_match_spike).
+## Call BEFORE the rig enters the tree (it builds its pipeline lazily on _ready).
+## Palette stays the rig default (the measured Ring 1 ramp).
+func apply_environment(rig: IsoRig) -> void:
+	rig.bg_color = Color("505d70")   # deeper than the haze so distance reads as depth
+	rig.fog_color = COL_FOG          # measured pale sky/haze (5a697d)
+	rig.fog_density = 0.016          # ~4x the old default — far lowland fades to haze
+	rig.ambient_energy = 0.5         # was 1.0; let the key light + fog carry the dusk
+	rig.vignette_strength = 0.35     # darken corners so the world sits in haze, not floats
 
 
 ## Populate this node with the Ring 1 terrain + props, drawing cel materials from
@@ -38,6 +60,24 @@ func build(rig: IsoRig) -> void:
 
 func _mat(col: Color) -> ShaderMaterial:
 	return _rig.solid_material(col)
+
+
+# A world-space triplanar cel material: a tiling texture (authored at its base
+# colour) tinted to a same-hue variant. Big surfaces only; tiny props stay on _mat.
+func _tex_mat(tex_path: String, tint: Color, scale: float) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = load("res://assets/shaders/cel_triplanar.gdshader")
+	m.set_shader_parameter("albedo_tex", load(tex_path))
+	m.set_shader_parameter("tint", tint)
+	m.set_shader_parameter("texture_scale", scale)
+	m.set_shader_parameter("bands", _rig.cel_bands)
+	m.set_shader_parameter("light_gain", _rig.cel_light_gain)
+	return m
+
+
+# Tint that maps a texture authored at `base` to a same-hue `target` (value scale).
+func _tint_for(target: Color, base: Color) -> Color:
+	return Color(target.r / base.r, target.g / base.g, target.b / base.b)
 
 
 # Lightweight box prop (MeshInstance3D, not CSG) for the many small details.
@@ -59,6 +99,8 @@ func _build_terrain() -> void:
 	var land := CSGBox3D.new()
 	land.size = Vector3(300.0, 2.0, 300.0)
 	land.position = Vector3(0.0, -2.6, 0.0)
+	# Lowland stays FLAT: a 300u backdrop tiles the texture ~120x into an obvious
+	# grid. Its job is to recede into haze (fog + vignette do that), so flat is right.
 	land.material = _mat(COL_GROUND_LOW)
 	add_child(land)
 
@@ -72,7 +114,7 @@ func _build_terrain() -> void:
 	var plateau := CSGBox3D.new()
 	plateau.size = Vector3(28.0, 1.0, 22.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
-	plateau.material = _mat(COL_GROUND)
+	plateau.material = _tex_mat(GROUND_TEX, Color.WHITE, GROUND_SCALE)
 	add_child(plateau)
 
 	# Worn ground patches break the flat single colour.
@@ -92,7 +134,7 @@ func _build_terrain() -> void:
 		var step := CSGBox3D.new()
 		step.size = Vector3(w, 1.0, 6.0)
 		step.position = Vector3(-9.0 - i * 1.5, base_y, 8.0 + i * 1.0)
-		step.material = _mat(COL_GROUND_LOW.lerp(COL_FOG, i * 0.2))
+		step.material = _tex_mat(GROUND_TEX, _tint_for(COL_GROUND_LOW.lerp(COL_FOG, i * 0.2), COL_GROUND), GROUND_SCALE)
 		add_child(step)
 		# Rock strata: thin darker bands on the cliff face.
 		for s in range(2):
@@ -108,14 +150,14 @@ func _build_terrain() -> void:
 	path_a.size = Vector3(2.0, 0.12, 11.0)
 	path_a.position = Vector3(-2.0, 0.52, 2.0)
 	path_a.rotation_degrees = Vector3(0.0, 18.0, 0.0)
-	path_a.material = _mat(COL_PATH)
+	path_a.material = _tex_mat(GROUND_TEX, _tint_for(COL_PATH, COL_GROUND), GROUND_SCALE)
 	add_child(path_a)
 
 	var path_b := CSGBox3D.new()
 	path_b.size = Vector3(2.0, 0.12, 8.0)
 	path_b.position = Vector3(1.5, 0.52, -5.0)
 	path_b.rotation_degrees = Vector3(0.0, -22.0, 0.0)
-	path_b.material = _mat(COL_PATH)
+	path_b.material = _tex_mat(GROUND_TEX, _tint_for(COL_PATH, COL_GROUND), GROUND_SCALE)
 	add_child(path_b)
 
 	# --- Domed observatory (back-centre), with a warm-lit doorway ---
@@ -145,6 +187,71 @@ func _build_terrain() -> void:
 		chunk.position = Vector3(rng.randf_range(-9.0, 9.0), 0.5 + s * 0.3, rng.randf_range(-7.0, 7.0))
 		chunk.rotation_degrees = Vector3(0.0, rng.randf_range(0.0, 90.0), 0.0)
 		add_child(chunk)
+
+	# --- Density pass (look-match step 3): the concept is CROWDED. Layer extra
+	# flora (three silhouettes) + debris, rejecting the central walkable band so
+	# combat signals stay legible. Own rng (seed 13) so the baseline scatter above
+	# is byte-for-byte unchanged. ---
+	var rng2 := RandomNumberGenerator.new()
+	rng2.seed = 13
+	for n in range(46):
+		var gp := Vector3(rng2.randf_range(-12.0, 12.0), 0.5, rng2.randf_range(-9.5, 9.5))
+		if _is_central(gp):
+			continue
+		add_child(_make_grass_tuft(gp, rng2))
+	for n in range(16):
+		var rp := Vector3(rng2.randf_range(-12.0, 12.0), 0.5, rng2.randf_range(-9.5, 9.5))
+		if _is_central(rp):
+			continue
+		add_child(_make_reed(rp, rng2))
+	for n in range(12):
+		var fp := Vector3(rng2.randf_range(-11.5, 11.5), 0.5, rng2.randf_range(-9.0, 9.0))
+		if _is_central(fp):
+			continue
+		add_child(_make_flower(fp, rng2))
+	for n in range(12):
+		var s2 := rng2.randf_range(0.25, 0.55)
+		var chunk2 := _box(Vector3(s2, s2 * 0.6, s2), COL_STONE_DARK if n % 2 == 0 else COL_STONE)
+		chunk2.position = Vector3(rng2.randf_range(-10.0, 10.0), 0.5 + s2 * 0.3, rng2.randf_range(-8.0, 8.0))
+		chunk2.rotation_degrees = Vector3(rng2.randf_range(-12.0, 12.0), rng2.randf_range(0.0, 90.0), rng2.randf_range(-12.0, 12.0))
+		add_child(chunk2)
+
+
+# Central walkable band kept clear so enemy/warrior signals stay legible.
+func _is_central(p: Vector3) -> bool:
+	return absf(p.x) < 4.5 and absf(p.z) < 4.0
+
+
+# A tall pale reed / dead stalk — a second flora silhouette for variety.
+func _make_reed(pos: Vector3, rng: RandomNumberGenerator) -> Node3D:
+	var reed := Node3D.new()
+	reed.position = pos
+	var h := rng.randf_range(1.2, 2.3)
+	var w := rng.randf_range(0.06, 0.12)
+	var col := COL_FLORA2 if rng.randf() < 0.5 else COL_FLORA
+	var stalk := _box(Vector3(w, h, w), col.lerp(COL_GROUND, rng.randf() * 0.3))
+	stalk.position = Vector3(0.0, h * 0.5, 0.0)
+	stalk.rotation_degrees = Vector3(rng.randf_range(-8.0, 8.0), rng.randf_range(0.0, 360.0), rng.randf_range(-8.0, 8.0))
+	reed.add_child(stalk)
+	if rng.randf() < 0.6:
+		var bud := _box(Vector3(w * 2.0, w * 2.5, w * 2.0), COL_PALE)
+		bud.position = Vector3(0.0, h * 0.96, 0.0)
+		reed.add_child(bud)
+	return reed
+
+
+# A small pale flower — a tiny bright accent (the concept's pale blooms).
+func _make_flower(pos: Vector3, rng: RandomNumberGenerator) -> Node3D:
+	var flower := Node3D.new()
+	flower.position = pos
+	var h := rng.randf_range(0.35, 0.7)
+	var stalk := _box(Vector3(0.04, h, 0.04), COL_FLORA2)
+	stalk.position = Vector3(0.0, h * 0.5, 0.0)
+	flower.add_child(stalk)
+	var head := _box(Vector3(0.14, 0.14, 0.14), COL_PALE)
+	head.position = Vector3(0.0, h + 0.05, 0.0)
+	flower.add_child(head)
+	return flower
 
 
 func _make_stairs(base_pos: Vector3, steps: int) -> Node3D:
@@ -220,7 +327,7 @@ func _make_domed_ruin(base_pos: Vector3, radius: float, lit_doorway: bool) -> No
 	drum.radius = radius
 	drum.height = radius * 1.1
 	drum.position = Vector3(0.0, radius * 0.55, 0.0)
-	drum.material = _mat(COL_STONE)
+	drum.material = _tex_mat(STONE_TEX, Color.WHITE, STONE_SCALE)
 	ruin.add_child(drum)
 
 	# Faceted dome (low segment count reads as built panels, not a balloon).
@@ -229,7 +336,7 @@ func _make_domed_ruin(base_pos: Vector3, radius: float, lit_doorway: bool) -> No
 	dome.radial_segments = 8
 	dome.rings = 4
 	dome.position = Vector3(0.0, radius * 1.1, 0.0)
-	dome.material = _mat(COL_STONE.lerp(COL_PALE, 0.12))
+	dome.material = _tex_mat(STONE_TEX, _tint_for(COL_STONE.lerp(COL_PALE, 0.12), COL_STONE), STONE_SCALE)
 	ruin.add_child(dome)
 
 	# Structural ring band where dome meets drum.
@@ -237,7 +344,7 @@ func _make_domed_ruin(base_pos: Vector3, radius: float, lit_doorway: bool) -> No
 	band.radius = radius * 1.06
 	band.height = 0.3
 	band.position = Vector3(0.0, radius * 1.1, 0.0)
-	band.material = _mat(COL_STONE_DARK)
+	band.material = _tex_mat(STONE_TEX, _tint_for(COL_STONE_DARK, COL_STONE), STONE_SCALE)
 	ruin.add_child(band)
 
 	# Finial spire on top.
@@ -269,7 +376,7 @@ func _make_domed_ruin(base_pos: Vector3, radius: float, lit_doorway: bool) -> No
 func _make_arch(base_pos: Vector3) -> Node3D:
 	var arch := Node3D.new()
 	arch.position = base_pos
-	var mat := _mat(COL_STONE_DARK)
+	var mat := _tex_mat(STONE_TEX, _tint_for(COL_STONE_DARK, COL_STONE), STONE_SCALE)
 	for dx in [-1.4, 1.4]:
 		var pillar := CSGBox3D.new()
 		pillar.size = Vector3(0.8, 4.0, 0.8)

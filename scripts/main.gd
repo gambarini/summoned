@@ -74,8 +74,8 @@ func _ready() -> void:
 	# --- 3D presentation rig: scene owns it, configures it per ring, mounts ----
 	# the selected ring's terrain builder directly. Per-ring palette/environment
 	# must be set BEFORE add_child (the rig builds its pipeline lazily on _ready
-	# via _ensure_built). Ring 1 keeps the rig's baked defaults (no override) so
-	# its verified render is provably untouched.
+	# via _ensure_built). Every ring now supplies apply_environment() (Ring 1's is
+	# the atmosphere pass: fog ramp + dropped ambient, see ring1_world.gd).
 	_rig = load("res://scenes/iso_rig.tscn").instantiate()
 	_world = _make_ring_world(GameState.current_ring)
 	if _world.has_method("palette"):

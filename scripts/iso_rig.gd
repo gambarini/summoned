@@ -60,12 +60,16 @@ const DIR_NAMES := [
 @export var fog_color := Color("5a697d")        # aerial haze tint
 @export var fog_density := 0.004                # keep light; only far edge fades
 @export var ambient_color := Color("eef1f5")    # near-white flat fill (keeps albedo)
+@export var ambient_energy := 1.0               # fill strength; <1 lets fog/key model dusk
 @export var key_light_color := Color("c8d0db")  # cold, raking key light
 @export var key_light_rotation := Vector3(-42.0, 130.0, 0.0)
 
 # --- Cel shading ---------------------------------------------------------
 @export var cel_bands := 2.0       # number of hard light steps
 @export var cel_light_gain := 0.3  # how much the directional adds (low = soft)
+
+# --- Post pass --------------------------------------------------------------
+@export var vignette_strength := 0.0  # corner darkening (per-ring); 0 = off
 
 var _world_viewport: SubViewport  # the 3D render
 var _post_viewport: SubViewport   # 3D render + palette post (this is what's captured)
@@ -245,6 +249,7 @@ func _make_post_material() -> ShaderMaterial:
 	mat.set_shader_parameter("tex_size", Vector2(render_size))
 	mat.set_shader_parameter("dither_strength", 0.0)  # flat bands, not stippled blend
 	mat.set_shader_parameter("edge_strength", 0.0)    # no ink outline
+	mat.set_shader_parameter("vignette", vignette_strength)
 	return mat
 
 
@@ -260,7 +265,7 @@ func _make_environment() -> WorldEnvironment:
 	env.background_color = bg_color
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = ambient_color
-	env.ambient_light_energy = 1.0  # near-white flat fill; cel light adds the bands
+	env.ambient_light_energy = ambient_energy  # 1.0 = flat fill; per-ring can dim for dusk
 	env.fog_enabled = true
 	env.fog_light_color = fog_color
 	env.fog_light_energy = 1.0

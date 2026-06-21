@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://beeubd4un77el"]
+
+[ext_resource type="Script" uid="uid://dygmnoobic47b" path="res://scripts/look_spike.gd" id="1_s4u21"]
+
+[node name="LookSpike" type="Node" unique_id=892355783]
+script = ExtResource("1_s4u21")

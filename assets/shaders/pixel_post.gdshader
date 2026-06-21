@@ -11,6 +11,10 @@ uniform int palette_count = 16;
 uniform vec2 tex_size = vec2(320.0, 180.0);
 uniform float dither_strength = 0.05;
 uniform float edge_strength = 0.6;
+// Radial corner darkening toward the frame edges, applied BEFORE the palette snap
+// so corners land on darker palette entries (stays pixel-art). Makes the world sit
+// in haze instead of floating as a hard-edged slab. 0 = off (per-ring opt-in).
+uniform float vignette = 0.0;
 
 const float bayer[16] = float[16](
 	0.0, 8.0, 2.0, 10.0,
@@ -45,6 +49,11 @@ void fragment() {
 	ivec2 p = ivec2(floor(UV * tex_size));
 	int idx = (p.y % 4) * 4 + (p.x % 4);
 	col += vec3((bayer[idx] / 16.0 - 0.5) * dither_strength);
+
+	// Vignette: darken toward the corners so the world dissolves into haze at the
+	// frame edge instead of ending in a hard floating-slab boundary.
+	vec2 vd = UV - vec2(0.5);
+	col *= 1.0 - vignette * clamp(dot(vd, vd) * 2.0, 0.0, 1.0);
 
 	// Snap to nearest palette colour (constant loop bound for ES compat).
 	float best = 1e9;
