@@ -140,6 +140,10 @@ func _sync_arcs() -> void:
 			_arc_meshes.erase(arc)
 
 	for arc in get_tree().get_nodes_in_group(ARC_GROUP):
+		# The player's slash is drawn off the sword tip by WarriorSync, not as a flat
+		# ground decal — skip those (flagged in warrior.gd:_spawn_attack_arc).
+		if arc.has_meta("skip_world_mirror"):
+			continue
 		if not _arc_meshes.has(arc):
 			var mi := _make_arc_billboard(arc)
 			if mi == null:

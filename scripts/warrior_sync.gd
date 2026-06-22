@@ -93,6 +93,7 @@ var _form := 0.0
 var _form_eased := 0.0   # smoothstep(_form) — what the mesh/effects actually use
 var _form_sink := 0.0    # world-units the figure drops into the plateau as it collapses
 var _prev_vfx := ""
+var _prev_state_for_arc := ""   # edge-detect ATTACK_ACTIVE to spawn the slash once per strike
 var _notation: GPUParticles3D
 var _hollow: Node3D
 var _hollow_void: MeshInstance3D
@@ -257,6 +258,63 @@ func _make_ground_ring(radius: float, thickness: float, steps := 40) -> ArrayMes
 		var dz := sin(a)
 		verts.append(Vector3(dx * inner, 0.0, dz * inner))
 		verts.append(Vector3(dx * radius, 0.0, dz * radius))
+	var indices := PackedInt32Array()
+	for i in range(steps):
+		var b := i * 2
+		indices.append(b); indices.append(b + 1); indices.append(b + 2)
+		indices.append(b + 1); indices.append(b + 3); indices.append(b + 2)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+# --- Dissonance slash (the arc emitted from the sword swing) --------------
+# The arc of dissonance now exits the blade, not the floor: a crescent ribbon
+# parented to the mesh's sword-tip socket, so it rides the swing as the arm follows
+# through. Additive dissonance purple (the notation/pull hue) so it snaps cleanly.
+# Shape varies per combo step — a wide crescent for the two slashes, a narrow spike
+# for the thrust finisher. Collision is unchanged (the 2D AttackArc HitArea owns it).
+const SLASH_COLOR := Color(0.627, 0.502, 0.878)   # #a080e0
+const SLASH_DURATION := 0.22
+
+func _spawn_slash(step: int) -> void:
+	var tip := _mesh.get_sword_tip()
+	if tip == null:
+		return
+	var mi := MeshInstance3D.new()
+	mi.mesh = _make_slash_mesh(step)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(SLASH_COLOR.r, SLASH_COLOR.g, SLASH_COLOR.b, 0.9)
+	mi.material_override = mat
+	tip.add_child(mi)
+	var t := mi.create_tween().set_parallel(true)
+	t.tween_property(mi, "scale", Vector3.ONE * 1.2, SLASH_DURATION).from(Vector3.ONE * 0.4)
+	t.tween_property(mat, "albedo_color:a", 0.0, SLASH_DURATION).from(0.9)
+	t.chain().tween_callback(mi.queue_free)
+
+
+# Crescent ribbon in the tip's local XZ plane (the plane the blade tip sweeps), so it
+# fans out from the blade edge. Thrust (step 2) is a narrow forward spike instead.
+func _make_slash_mesh(step: int) -> ArrayMesh:
+	var span: float = deg_to_rad(44.0) if step == 2 else deg_to_rad(140.0)
+	var inner: float = 0.18 if step == 2 else 0.34
+	var outer: float = 1.4 if step == 2 else 1.05
+	var steps := 18
+	var verts := PackedVector3Array()
+	for i in range(steps + 1):
+		var a := lerpf(-span * 0.5, span * 0.5, float(i) / steps)
+		var dx := cos(a)
+		var dz := sin(a)
+		verts.append(Vector3(dx * inner, 0.0, dz * inner))
+		verts.append(Vector3(dx * outer, 0.0, dz * outer))
 	var indices := PackedInt32Array()
 	for i in range(steps):
 		var b := i * 2
@@ -573,7 +631,7 @@ func _process(delta: float) -> void:
 	_update_hollow(delta)
 
 
-const LUNGE_PX := 7.0    # forward hop on the strike (back on the windup) — reads as a lunge
+const LUNGE_PX := 12.0   # forward hop on the strike (back on the windup) — reads as a lunge
 const RECOIL_PX := 6.0   # backward jolt on hurt
 
 func _sync_position() -> void:
@@ -615,13 +673,18 @@ func _animate(delta: float) -> void:
 
 	# Sword: windup back on startup, full strike on active, settle through recovery.
 	var s: String = _warrior.vfx_state()
+	# Spawn the dissonance slash off the blade tip the instant the strike lands; it
+	# parents to the tip socket, so it rides the swing as the arm follows through.
+	if s == "ATTACK_ACTIVE" and _prev_state_for_arc != "ATTACK_ACTIVE":
+		_spawn_slash(_warrior.vfx_combo_step())
+	_prev_state_for_arc = s
 	var atk_target := 0.0
 	match s:
 		"ATTACK_STARTUP": atk_target = -0.25
 		"ATTACK_ACTIVE": atk_target = 1.0
 		"ATTACK_RECOVERY": atk_target = 0.35
 	_atk = move_toward(_atk, atk_target, delta * ATTACK_RATE)
-	_mesh.set_attack(_atk)
+	_mesh.set_attack(_atk, _warrior.vfx_combo_step())
 
 	# Hurt: a snappy backward jolt (applied as a position recoil in _sync_position).
 	_recoil = move_toward(_recoil, 1.0 if s == "HURT" else 0.0, delta * 16.0)
