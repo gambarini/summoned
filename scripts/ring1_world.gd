@@ -124,13 +124,28 @@ func _build_terrain() -> void:
 	plateau.material = _tex_mat(GROUND_TEX, Color.WHITE, GROUND_SCALE)
 	add_child(plateau)
 
-	# Worn ground patches break the flat single colour.
-	for n in range(7):
-		var patch := _box(
-			Vector3(rng.randf_range(3.0, 6.0), 0.06, rng.randf_range(3.0, 6.0)),
-			COL_GROUND_LOW if n % 2 == 0 else COL_GROUND.lerp(COL_PATH, 0.25)
-		)
-		patch.position = Vector3(rng.randf_range(-10.0, 10.0), 0.5, rng.randf_range(-8.0, 8.0))
+	# Broad worn ground patches break up the flat slab. On flat ground the texture's
+	# light is constant, so this large-scale, NON-repeating value variation (the thing
+	# a tiling 64px tile cannot supply without gridding) is what gives the camp floor
+	# the concept's mottled-earth read. Textured (same grain), tinted darker scuff /
+	# paler worn, varied size + rotation. See advisor note + look_match_spike.
+	# Tints kept moderate so patches read as organic worn earth, not hard dark slabs:
+	# the darkest is a partial lerp toward COL_GROUND_LOW, not the full value.
+	var patch_tints := [
+		_tint_for(COL_GROUND.lerp(COL_GROUND_LOW, 0.6), COL_GROUND),  # dark damp earth
+		_tint_for(COL_GROUND.lerp(COL_GROUND_LOW, 0.3), COL_GROUND),  # mid scuff
+		_tint_for(COL_GROUND.lerp(COL_PATH, 0.7), COL_GROUND),        # pale worn
+		_tint_for(COL_GROUND.lerp(COL_PALE, 0.25), COL_GROUND),       # bright worn
+	]
+	for n in range(18):
+		var bm := BoxMesh.new()
+		bm.size = Vector3(rng.randf_range(3.5, 8.0), 0.05, rng.randf_range(3.5, 8.0))
+		bm.material = _tex_mat(GROUND_TEX, patch_tints[n % patch_tints.size()], GROUND_SCALE)
+		var patch := MeshInstance3D.new()
+		patch.mesh = bm
+		# Denser over the visible camp, a few drifting out toward the rim.
+		var spread := 12.0 if n < 12 else 20.0
+		patch.position = Vector3(rng.randf_range(-spread, spread), 0.53, rng.randf_range(-spread * 0.8, spread * 0.8))
 		patch.rotation_degrees.y = rng.randf_range(0.0, 90.0)
 		add_child(patch)
 
