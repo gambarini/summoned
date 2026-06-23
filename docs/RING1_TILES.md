@@ -1,5 +1,11 @@
 # Ring 1 — The Pale Reaches: Tilesets
 
+> **⚠️ Superseded for walkable ground (2026-06-23).** The tiling ground texture this
+> doc describes read as undersampling "static" at the iso distance. Walkable ground in
+> every ring + the villa now uses the **flat colour + macro-noise + decals** recipe —
+> see `RENDERING_3D.md` ("Ground style") and `scripts/ground_style.gd`. This file is
+> kept as history / for the prop + tile generation notes (still used for stone ruins).
+
 Implementation reference for Ring 1 ground tiles. Design intent lives in the GDD
 (`../../idea/Summoned_GDD.html`, Ring 1 / Visual Direction). This file is the
 import + wiring reference only.

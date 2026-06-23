@@ -34,6 +34,9 @@ const STONE_SCALE := 0.32   # tiles/world-unit for ALL stone (constant block siz
 const GROUND_TEX := "res://assets/textures/ground_tile.png"
 const GROUND_SCALE := 0.4    # one scale for ALL ground/path
 
+# Walkable ground (plateau/paths) uses the shared dusty-rock recipe (flat cel colour +
+# macro value-drift + scattered decals) via `GroundStyle`. Cliffs + stone ruins keep
+# their tiling textures (peripheral / coarse masonry). See docs/RENDERING_3D.md.
 var _rig: IsoRig
 
 
@@ -56,6 +59,7 @@ func apply_environment(rig: IsoRig) -> void:
 func build(rig: IsoRig) -> void:
 	_rig = rig
 	_build_terrain()
+	GroundStyle.scatter_decals(self, _rig, SimSpace.half_world(), COL_GROUND)
 
 
 func _mat(col: Color) -> ShaderMaterial:
@@ -121,33 +125,12 @@ func _build_terrain() -> void:
 	# warrior never teeters on the lip.
 	plateau.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
-	plateau.material = _tex_mat(GROUND_TEX, Color.WHITE, GROUND_SCALE)
+	plateau.material = GroundStyle.ground_mat(_rig, COL_GROUND)
 	add_child(plateau)
 
-	# Broad worn ground patches break up the flat slab. On flat ground the texture's
-	# light is constant, so this large-scale, NON-repeating value variation (the thing
-	# a tiling 64px tile cannot supply without gridding) is what gives the camp floor
-	# the concept's mottled-earth read. Textured (same grain), tinted darker scuff /
-	# paler worn, varied size + rotation. See advisor note + look_match_spike.
-	# Tints kept moderate so patches read as organic worn earth, not hard dark slabs:
-	# the darkest is a partial lerp toward COL_GROUND_LOW, not the full value.
-	var patch_tints := [
-		_tint_for(COL_GROUND.lerp(COL_GROUND_LOW, 0.6), COL_GROUND),  # dark damp earth
-		_tint_for(COL_GROUND.lerp(COL_GROUND_LOW, 0.3), COL_GROUND),  # mid scuff
-		_tint_for(COL_GROUND.lerp(COL_PATH, 0.7), COL_GROUND),        # pale worn
-		_tint_for(COL_GROUND.lerp(COL_PALE, 0.25), COL_GROUND),       # bright worn
-	]
-	for n in range(18):
-		var bm := BoxMesh.new()
-		bm.size = Vector3(rng.randf_range(3.5, 8.0), 0.05, rng.randf_range(3.5, 8.0))
-		bm.material = _tex_mat(GROUND_TEX, patch_tints[n % patch_tints.size()], GROUND_SCALE)
-		var patch := MeshInstance3D.new()
-		patch.mesh = bm
-		# Denser over the visible camp, a few drifting out toward the rim.
-		var spread := 12.0 if n < 12 else 20.0
-		patch.position = Vector3(rng.randf_range(-spread, spread), 0.53, rng.randf_range(-spread * 0.8, spread * 0.8))
-		patch.rotation_degrees.y = rng.randf_range(0.0, 90.0)
-		add_child(patch)
+	# (The old 18 textured "worn patches" that broke up the slab are gone — the smooth
+	# macro value-drift on the plateau material now supplies that broad mottle, and the
+	# scattered decals (_scatter_ground_decals) supply the stone/crack detail.)
 
 	# --- Stratified cliff descending off the plateau's front edge (relocated to the
 	# real perimeter at explore-scale; was the old +-12 edge). ---
@@ -161,14 +144,14 @@ func _build_terrain() -> void:
 	path_a.size = Vector3(2.0, 0.12, 11.0)
 	path_a.position = Vector3(-2.0, 0.52, 2.0)
 	path_a.rotation_degrees = Vector3(0.0, 18.0, 0.0)
-	path_a.material = _tex_mat(GROUND_TEX, _tint_for(COL_PATH, COL_GROUND), GROUND_SCALE)
+	path_a.material = GroundStyle.ground_mat(_rig, COL_PATH)
 	add_child(path_a)
 
 	var path_b := CSGBox3D.new()
 	path_b.size = Vector3(2.0, 0.12, 8.0)
 	path_b.position = Vector3(1.5, 0.52, -5.0)
 	path_b.rotation_degrees = Vector3(0.0, -22.0, 0.0)
-	path_b.material = _tex_mat(GROUND_TEX, _tint_for(COL_PATH, COL_GROUND), GROUND_SCALE)
+	path_b.material = GroundStyle.ground_mat(_rig, COL_PATH)
 	add_child(path_b)
 
 	# --- Domed observatory (back-centre), with a warm-lit doorway ---

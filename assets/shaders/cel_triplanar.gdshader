@@ -14,6 +14,16 @@ uniform float blend_sharpness = 4.0; // triplanar seam tightness
 uniform float bands = 2.0;           // number of hard light steps (match cel.gdshader)
 uniform float light_gain = 0.3;      // directional contribution (low = soft)
 
+// Macro value-variation: a SECOND, very-low-frequency noise sampled in world space
+// that modulates the tiled albedo's VALUE, so the 64px tile's repeat is broken across
+// the whole surface at once (the explore-scale grid fix). World-sampled => stationary
+// under camera orbit (no swim), same as the base grain. Survives the palette snap
+// because it is large-scale value drift (lands on different ramp steps), not a within-
+// block gradient. macro_strength 0 = identity (production default until tuned in).
+uniform sampler2D macro_noise : hint_default_white, filter_linear, repeat_enable;
+uniform float macro_scale = 0.03;    // tiles per world unit (small = broad patches, tens of units)
+uniform float macro_strength = 0.0;  // 0..~0.4 value excursion; 0 keeps current look exactly
+
 varying vec3 v_world_pos;
 varying vec3 v_world_normal;
 
@@ -36,6 +46,9 @@ void fragment() {
 	vec3 cz = texture(albedo_tex, uv_z).rgb;
 
 	ALBEDO = (cx * bw.x + cy * bw.y + cz * bw.z) * tint.rgb;
+	// Broad value drift (m~0.5 mean -> no change; strength scales the excursion).
+	float m = texture(macro_noise, v_world_pos.xz * macro_scale).r;
+	ALBEDO *= 1.0 + (m - 0.5) * 2.0 * macro_strength;
 	ROUGHNESS = 1.0;
 }
 

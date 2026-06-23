@@ -60,6 +60,10 @@ func _ready() -> void:
 	# via _ensure_built). Every ring now supplies apply_environment() (Ring 1's is
 	# the atmosphere pass: fog ramp + dropped ambient, see ring1_world.gd).
 	_rig = load("res://scenes/iso_rig.tscn").instantiate()
+	# Higher internal resolution for sharper ground/decal definition (the dusty-rock
+	# recipe). Warrior is a 3D mesh (scales cleanly); enemy + notation sprites are the
+	# one thing to watch at this res. See memory ground_texture_spike.
+	_rig.render_size = Vector2i(480, 270)
 	_world = _make_ring_world(GameState.current_ring)
 	if _world.has_method("palette"):
 		_rig.palette = _world.palette()

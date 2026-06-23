@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://b6u4ofbm6aget"]
+
+[ext_resource type="Script" uid="uid://c5k0vtym4mdqk" path="res://scripts/ground_spike.gd" id="1_we8fl"]
+
+[node name="GroundSpike" type="Node" unique_id=723648814]
+script = ExtResource("1_we8fl")

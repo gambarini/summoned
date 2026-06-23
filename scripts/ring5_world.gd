@@ -86,6 +86,7 @@ func apply_environment(rig: IsoRig) -> void:
 func build(rig: IsoRig) -> void:
 	_rig = rig
 	_build_terrain()
+	GroundStyle.scatter_decals(self, _rig, SimSpace.half_world(), COL_PLAZA)
 
 
 func _mat(col: Color) -> ShaderMaterial:
@@ -121,7 +122,7 @@ func _build_terrain() -> void:
 	var plaza := CSGBox3D.new()
 	plaza.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plaza.position = Vector3(0.0, 0.0, 0.0)
-	plaza.material = _mat(COL_PLAZA)
+	plaza.material = GroundStyle.ground_mat(_rig, COL_PLAZA)
 	add_child(plaza)
 
 	# Worn / lit plaza patches break the flat colour (formal, low-contrast — mid greys,

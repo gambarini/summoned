@@ -87,6 +87,7 @@ func apply_environment(rig: IsoRig) -> void:
 func build(rig: IsoRig) -> void:
 	_rig = rig
 	_build_terrain()
+	GroundStyle.scatter_decals(self, _rig, SimSpace.half_world(), COL_GROUND)
 
 
 func _mat(col: Color) -> ShaderMaterial:
@@ -123,7 +124,7 @@ func _build_terrain() -> void:
 	var plateau := CSGBox3D.new()
 	plateau.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
-	plateau.material = _mat(COL_GROUND)
+	plateau.material = GroundStyle.ground_mat(_rig, COL_GROUND)
 	add_child(plateau)
 
 	# Worn purple ground patches break the flat plateau colour.
@@ -141,13 +142,13 @@ func _build_terrain() -> void:
 	path_a.size = Vector3(2.2, 0.12, 12.0)
 	path_a.position = Vector3(-2.0, 0.52, 2.0)
 	path_a.rotation_degrees = Vector3(0.0, 16.0, 0.0)
-	path_a.material = _mat(COL_PATH)
+	path_a.material = GroundStyle.ground_mat(_rig, COL_PATH)
 	add_child(path_a)
 	var path_b := CSGBox3D.new()
 	path_b.size = Vector3(2.2, 0.12, 9.0)
 	path_b.position = Vector3(2.0, 0.52, -5.5)
 	path_b.rotation_degrees = Vector3(0.0, -20.0, 0.0)
-	path_b.material = _mat(COL_PATH_PALE)
+	path_b.material = GroundStyle.ground_mat(_rig, COL_PATH_PALE)
 	add_child(path_b)
 
 	# --- The warm glow point: "a wrongness at colour's edge" (concept centre) ---

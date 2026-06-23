@@ -24,6 +24,7 @@ func _ready() -> void:
 	if has_node("Anthe"):
 		$Anthe.visible = false
 	_rig = load("res://scenes/iso_rig.tscn").instantiate()
+	_rig.render_size = Vector2i(480, 270)  # match the rings' sharper definition (no base->ring jump)
 	_world = VillaWorld.new()
 	_world.apply_environment(_rig)
 	add_child(_rig)

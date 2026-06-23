@@ -48,6 +48,9 @@ func apply_environment(rig: IsoRig) -> void:
 func build(rig: IsoRig) -> void:
 	_rig = rig
 	_build_villa()
+	# Dusty-rock ground recipe (shared). Villa plateau is a fixed 40x32, so pass its
+	# half-extents (20x16) — slightly inset so decals stay on the slab.
+	GroundStyle.scatter_decals(self, _rig, Vector2(19.0, 15.0), COL_GROUND)
 
 
 func _mat(col: Color) -> ShaderMaterial:
@@ -78,7 +81,7 @@ func _build_villa() -> void:
 	var plateau := CSGBox3D.new()
 	plateau.size = Vector3(40.0, 1.0, 32.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
-	plateau.material = _mat(COL_GROUND)
+	plateau.material = GroundStyle.ground_mat(_rig, COL_GROUND)
 	add_child(plateau)
 
 	# Worn ground patches.

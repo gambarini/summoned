@@ -86,6 +86,7 @@ func apply_environment(rig: IsoRig) -> void:
 func build(rig: IsoRig) -> void:
 	_rig = rig
 	_build_terrain()
+	GroundStyle.scatter_decals(self, _rig, SimSpace.half_world(), COL_GROUND)
 
 
 func _mat(col: Color) -> ShaderMaterial:
@@ -121,7 +122,7 @@ func _build_terrain() -> void:
 	var plateau := CSGBox3D.new()
 	plateau.size = Vector3(half.x * 2.0 + 2.0, 1.0, half.y * 2.0 + 2.0)
 	plateau.position = Vector3(0.0, 0.0, 0.0)
-	plateau.material = _mat(COL_GROUND)
+	plateau.material = GroundStyle.ground_mat(_rig, COL_GROUND)
 	add_child(plateau)
 
 	# Worn / lit floor patches break the flat plateau colour (some pale-lit, some
