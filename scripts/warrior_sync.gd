@@ -633,13 +633,19 @@ func _process(delta: float) -> void:
 
 const LUNGE_PX := 12.0   # forward hop on the strike (back on the windup) — reads as a lunge
 const RECOIL_PX := 6.0   # backward jolt on hurt
+# Idle crouch: how far the hips drop as the knees bend (world units), so the soles stay
+# planted and it reads as a sink into the stance rather than feet lifting off the ground.
+# Matched to the mesh's IDLE_KNEE_* bend; fades out with the same weight as the stance blade.
+const CROUCH_DROP := 0.16
 
 func _sync_position() -> void:
 	# Attack lunges forward along the facing; hurt jolts backward. (Both in sim px.)
 	var push := _atk * LUNGE_PX - _recoil * RECOIL_PX
 	var sim := _warrior.global_position + _face_dir * push
+	# Drop the hips while crouched (idle, not moving/striking) so the bent-knee soles stay down.
+	var crouch := (1.0 - _walk_amt) * (1.0 - clampf(_atk, 0.0, 1.0))
 	# _form_sink drops him into the plateau on death (and lifts him out of it on summon).
-	_mesh.position = SimSpace.to_world(sim, FEET_Y + _bob_y - _form_sink)
+	_mesh.position = SimSpace.to_world(sim, FEET_Y + _bob_y - _form_sink - CROUCH_DROP * crouch)
 
 
 # Procedural animation: walk cycle from velocity, sword swing from the attack states,
@@ -729,6 +735,12 @@ func _update_notation_emission(s: String) -> void:
 		_notation.emitting = true
 
 
+# Idle bladed-stance yaw: how far the WHOLE body turns side-on while standing. Positive
+# brings the warrior's LEFT side forward (toward his facing) and the sword/right side back
+# — the fencer's profile the stance asks for. Faded out as he moves or strikes so he squares
+# up to his facing to act; the Hollow gate still keys off `_face_dir`, not this visual yaw.
+const STANCE_YAW := 0.5
+
 # The mesh faces its WORLD-absolute movement heading (true 3D). `_facing` — the
 # camera-relative 8-dir name driving the Hollow visibility gate — is re-derived
 # from that heading EVERY frame (not just on movement), so orbiting the camera
@@ -737,8 +749,10 @@ func _sync_facing() -> void:
 	var v := _warrior.velocity
 	if v.length() >= MOVE_EPSILON:
 		_face_dir = Vector2(v.x, v.y).normalized()
-	# +Z is the mesh's front; rotate it onto (face_dir.x, face_dir.y) in world (x,z).
-	_mesh.rotation.y = atan2(_face_dir.x, _face_dir.y)
+	# +Z is the mesh's front; rotate it onto (face_dir.x, face_dir.y) in world (x,z), then
+	# add the idle bladed-stance turn (full when standing, gone when moving/striking).
+	var blade := (1.0 - _walk_amt) * (1.0 - clampf(_atk, 0.0, 1.0))
+	_mesh.rotation.y = atan2(_face_dir.x, _face_dir.y) + STANCE_YAW * blade
 	var dir_name := _rig.facing_name(_face_dir)
 	if dir_name != "":
 		_facing = dir_name

@@ -27,6 +27,7 @@ const TOTAL_HEIGHT := 2.94   # helm crest top; ~matches the billboard's pixel_si
 
 # Animation throws (radians).
 const LEG_SWING := 0.5
+const KNEE_WALK := 0.55      # knee flex amplitude through the walk cycle (rad)
 const ARM_RAISE := 2.5       # sword from resting point-down to a forward strike (big reach)
 const SWING_YAW := 2.0       # horizontal slash sweep amplitude (rad) for the combo swings (wide)
 # Whole-body strike (the kinetic chain: hips/shoulders drive, the arm only leads). The
@@ -36,6 +37,26 @@ const TORSO_LEAN := 0.28     # rad (~16°) forward torso commit on the strike
 const STANCE := 1.5          # fore/aft leg brace as a fraction of LEG_SWING (deep lunge)
 const STANCE_WIDEN := 0.42   # rad (~24°) lateral foot splay — a wide planted power stance
 const BODY_SINK := 0.16      # how far the body drops into the cut (local units)
+
+# Combat-ready idle guard — the t=0 endpoint of set_attack(). Instead of standing limp
+# with the sword hanging point-down, the warrior holds a guard: blade raised toward the
+# threat, shoulders bladed, weight forward, feet planted. The tuned strike poses blend
+# OUT from this guard (lerp by the strike weight), so at full strike every channel still
+# lands on its original value — the attack is untouched, only the rest pose changed.
+# A bladed, orthodox fighting stance: body turned side-on (left shoulder + foot lead), the
+# sword cocked high-and-back over the right shoulder, gripped TWO-HANDED (both gauntlets on
+# the hilt). The WHOLE body turning side-on is done by WarriorSync.STANCE_YAW
+# (it yaws the entire mesh so legs + hips + torso blade together); this torso twist only
+# adds a small extra shoulder draw on top, kept low so the strike whip keeps its full range.
+# IDLE_STANCE is negative so the LEFT foot leads and the right trails.
+const IDLE_ARM_PITCH := -2.6   # sword cocked high (tip up/back over the right shoulder)
+const IDLE_ARM_YAW := -0.5     # angle the blade back to the right — wound up to strike
+const IDLE_TORSO_TWIST := 0.32 # shoulders blade MORE than the hips (chart: upper body turned, chest still toward the enemy)
+const IDLE_TORSO_LEAN := 0.10  # slight forward weight — alert, NOT hunched over
+const IDLE_STANCE := -0.7      # fore/aft stagger: left foot ahead, right foot driven back
+const IDLE_WIDEN := 0.18       # lateral foot splay — a planted, braced stance
+const IDLE_KNEE_LEAD := 0.48   # lead (front) knee bent — a contained crouch, not a deep squat
+const IDLE_KNEE_REAR := 0.22   # rear knee softer (that leg drives back, nearer straight)
 
 # --- Palette (snaps to the active ring palette in the post pass) -------------
 const ARMOR_DARK := Color("241a33")   # deep indigo plate -> dark blue-grey
@@ -62,12 +83,16 @@ const CAPE_DROOP_Y := 0.22     # side strips sag lower as he frays
 var _rig: IsoRig
 var _leg_l: Node3D
 var _leg_r: Node3D
+var _knee_l: Node3D    # knee pivot (child of the _leg_l hip) — bends for the crouch + walk flex
+var _knee_r: Node3D
 var _torso: Node3D     # upper-body pivot — the whole torso twists/leans into a strike
 var _arm: Node3D       # sword shoulder pivot (child of _torso)
+var _left_arm: Node3D  # off-hand guard arm (held forward as a blocking hand)
 var _sword_tip: Node3D # blade-tip socket (WarriorSync anchors the slash arc here)
 var _cape: Node3D
 var _cape_l: MeshInstance3D
 var _cape_r: MeshInstance3D
+var _last_walk_amt: float = 0.0   # cached from set_walk() so set_attack() can relax the idle stance while moving
 
 
 ## Build the body under this node, using `rig` for cel materials. `hem_tint` is the
@@ -80,12 +105,19 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	var blade := rig.solid_material(BLADE_COL)
 	var hem := _unshaded(hem_tint)
 
-	# Legs on hip pivots (walk + attack stance). Lit plate (greaves) so the stance reads
-	# against the dark body; the surcoat below is shortened so the legs actually show.
-	_leg_l = _pivot(Vector3(-0.16, 0.95, 0.04))
-	_box(Vector3(0.22, 0.95, 0.26), Vector3(0.0, -0.48, 0.0), lit, 0.0, 0.0, _leg_l)
-	_leg_r = _pivot(Vector3(0.16, 0.95, 0.04))
-	_box(Vector3(0.22, 0.95, 0.26), Vector3(0.0, -0.48, 0.0), lit, 0.0, 0.0, _leg_r)
+	# Legs: thigh + knee pivot + shin + foot, so the knees can BEND for a proper crouched
+	# fighting stance (the guard-chart read). Lit plate greaves; surcoat shortened so they show.
+	# Hip pivot at y=0.95; thigh 0.52 -> knee at -0.52; shin 0.46 + a flat foot -> sole ~y=0.
+	_leg_l = _pivot(Vector3(-0.17, 0.95, 0.04))                                          # hip
+	_box(Vector3(0.22, 0.52, 0.26), Vector3(0.0, -0.26, 0.0), lit, 0.0, 0.0, _leg_l)     # thigh
+	_knee_l = _pivot(Vector3(0.0, -0.52, 0.0), _leg_l)                                   # knee
+	_box(Vector3(0.20, 0.46, 0.22), Vector3(0.0, -0.23, 0.0), lit, 0.0, 0.0, _knee_l)    # shin
+	_box(Vector3(0.24, 0.12, 0.34), Vector3(0.0, -0.46, 0.06), armor, 0.0, 0.0, _knee_l) # foot
+	_leg_r = _pivot(Vector3(0.17, 0.95, 0.04))
+	_box(Vector3(0.22, 0.52, 0.26), Vector3(0.0, -0.26, 0.0), lit, 0.0, 0.0, _leg_r)
+	_knee_r = _pivot(Vector3(0.0, -0.52, 0.0), _leg_r)
+	_box(Vector3(0.20, 0.46, 0.22), Vector3(0.0, -0.23, 0.0), lit, 0.0, 0.0, _knee_r)
+	_box(Vector3(0.24, 0.12, 0.34), Vector3(0.0, -0.46, 0.06), armor, 0.0, 0.0, _knee_r)
 
 	# Surcoat skirt (shorter, raised so the legs read) + burning hem band at its new base.
 	_cyl(0.26, 0.50, 0.85, Vector3(0.0, 1.28, 0.0), coat)
@@ -122,25 +154,40 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_box(Vector3(0.09, 0.10, 0.04), Vector3(0.08, 2.72, 0.23), _unshaded(EYE_COL), 0.0, 0.0, _torso)
 
 	# Sword on a shoulder pivot UNDER the torso, so the torso twist carries the arm + blade.
+	# Long two-hand handle: the grip pivot (arm origin) sits between the two hands.
 	_arm = _pivot(Vector3(0.40, 1.55, 0.12), _torso)
-	_box(Vector3(0.14, 1.62, 0.06), Vector3(0.0, -0.92, 0.0), blade, 0.0, 0.0, _arm)   # blade (longer + wider so it reads clearly)
-	_box(Vector3(0.32, 0.08, 0.10), Vector3(0.0, -0.05, 0.0), lit, 0.0, 0.0, _arm)     # crossguard
-	_box(Vector3(0.07, 0.13, 0.07), Vector3(0.0, 0.05, 0.0), armor, 0.0, 0.0, _arm)    # pommel
-	_box(Vector3(0.16, 0.22, 0.18), Vector3(-0.02, -0.11, 0.0), armor, 0.0, 0.0, _arm) # gauntlet
-	# Blade-tip socket: the far end of the 1.30-tall blade (centre y -0.77, so tip at
-	# -1.42). The slash arc spawns here in WarriorSync, riding the swing as the arm turns.
+	_box(Vector3(0.14, 1.62, 0.06), Vector3(0.0, -0.92, 0.0), blade, 0.0, 0.0, _arm)   # blade
+	_box(Vector3(0.36, 0.08, 0.12), Vector3(0.0, -0.11, 0.0), lit, 0.0, 0.0, _arm)     # crossguard
+	_box(Vector3(0.08, 0.11, 0.08), Vector3(0.0, 0.34, 0.0), armor, 0.0, 0.0, _arm)    # pommel
+	# TWO-HANDED grip: right hand high on the handle, left (off) hand below it. Both are
+	# children of the sword, so the grip stays locked to the hilt through every swing.
+	_box(Vector3(0.16, 0.21, 0.18), Vector3(-0.02, 0.17, 0.0), armor, 0.0, 0.0, _arm)  # right hand (upper)
+	_box(Vector3(0.16, 0.21, 0.18), Vector3(-0.02, 0.00, 0.0), armor, 0.0, 0.0, _arm)  # left hand (lower)
+	# Blade-tip socket: the far end of the blade. The slash arc spawns here in WarriorSync,
+	# riding the swing as the arm turns.
 	_sword_tip = Node3D.new()
 	_sword_tip.position = Vector3(0.0, -1.73, 0.0)
 	_arm.add_child(_sword_tip)
+
+	# Off (left) forearm bridging back toward the body from the lower hand. Parented to the
+	# sword so it tracks the hilt through every swing (the grip always reads two-handed).
+	_left_arm = _pivot(Vector3(-0.04, 0.0, 0.05), _arm)
+	_box(Vector3(0.14, 0.52, 0.14), Vector3(0.0, 0.26, 0.0), lit, 0.0, 0.0, _left_arm)  # forearm
+	_left_arm.rotation_degrees = Vector3(18.0, 0.0, 78.0)   # swing the forearm out toward the body
 
 
 # --- Procedural pose API (driven by WarriorSync) -----------------------------
 
 ## Walk cycle: opposite-phase leg swings, scaled by `amount` (0 idle .. 1 moving).
 func set_walk(phase: float, amount: float) -> void:
+	_last_walk_amt = amount
 	var s := sin(phase) * LEG_SWING * amount
 	if _leg_l: _leg_l.rotation.x = s
 	if _leg_r: _leg_r.rotation.x = -s
+	# Knees flex through the cycle. Set absolutely here (reset each frame) so the idle/strike
+	# crouch bend in set_attack composes on top with += , exactly like the hip stagger does.
+	if _knee_l: _knee_l.rotation.x = (0.5 - 0.5 * cos(phase)) * KNEE_WALK * amount
+	if _knee_r: _knee_r.rotation.x = (0.5 - 0.5 * cos(phase + PI)) * KNEE_WALK * amount
 
 
 ## Attack swing: `t` 0 (rest) .. 1 (full forward strike). Negative = windup back. `step`
@@ -151,42 +198,67 @@ func set_walk(phase: float, amount: float) -> void:
 func set_attack(t: float, step := 0) -> void:
 	if _torso == null:
 		return
-	var ts := clampf(t, 0.0, 1.0)   # strike portion only (drop the small negative windup dip)
+	# w carries ALL the strike's t-dependence: 0 = idle guard, 1 = the exact tuned strike.
+	# (t<0 is the brief windup — it holds the guard rather than dipping.)
+	var w := clampf(t, 0.0, 1.0)
+	# Per-step strike targets are the absolute t=1 values, so lerp(idle, strike, 1) == strike.
+	var s_arm_pitch: float
+	var s_arm_yaw: float
+	var s_arm_roll := 0.0
+	var s_torso_twist: float
+	var s_torso_lean: float
+	var s_sink: float
+	var s_stance: float   # fore/aft lunge (signed); engages only as the strike lands
 	match step:
 		1:  # reverse slash — body whips the opposite way to the basic slash
-			_torso.rotation.y = -TORSO_TWIST * t
-			_torso.rotation.x = TORSO_LEAN * t
-			_torso.position.y = -BODY_SINK * ts
-			_arm.rotation.x = -t * ARM_RAISE * 0.95
-			_arm.rotation.y = -SWING_YAW * t
-			_arm.rotation.z = 0.0
-			_apply_stance(-ts)
+			s_arm_pitch = -ARM_RAISE * 0.95
+			s_arm_yaw = -SWING_YAW
+			s_torso_twist = -TORSO_TWIST
+			s_torso_lean = TORSO_LEAN
+			s_sink = BODY_SINK
+			s_stance = -1.0
 		2:  # thrust finisher — hips square, drive straight in: deep lean + sink, no twist
-			_torso.rotation.y = 0.0
-			_torso.rotation.x = TORSO_LEAN * 1.6 * t
-			_torso.position.y = -BODY_SINK * 1.5 * ts
-			_arm.rotation.x = -t * ARM_RAISE * 1.1
-			_arm.rotation.y = 0.0
-			_arm.rotation.z = t * 0.18
-			_apply_stance(ts)
+			s_arm_pitch = -ARM_RAISE * 1.1
+			s_arm_yaw = 0.0
+			s_arm_roll = 0.18
+			s_torso_twist = 0.0
+			s_torso_lean = TORSO_LEAN * 1.6
+			s_sink = BODY_SINK * 1.5
+			s_stance = 1.0
 		_:  # slash — torso whips through, the blade leads the cut across the body
-			_torso.rotation.y = TORSO_TWIST * t
-			_torso.rotation.x = TORSO_LEAN * t
-			_torso.position.y = -BODY_SINK * ts
-			_arm.rotation.x = -t * ARM_RAISE * 0.95
-			_arm.rotation.y = SWING_YAW * t
-			_arm.rotation.z = 0.0
-			_apply_stance(ts)
+			s_arm_pitch = -ARM_RAISE * 0.95
+			s_arm_yaw = SWING_YAW
+			s_torso_twist = TORSO_TWIST
+			s_torso_lean = TORSO_LEAN
+			s_sink = BODY_SINK
+			s_stance = 1.0
+	# Blend the combat-ready guard out into the strike as w rises.
+	_torso.rotation.y = lerpf(IDLE_TORSO_TWIST, s_torso_twist, w)
+	_torso.rotation.x = lerpf(IDLE_TORSO_LEAN, s_torso_lean, w)
+	_torso.position.y = lerpf(0.0, -s_sink, w)
+	_arm.rotation.x = lerpf(IDLE_ARM_PITCH, s_arm_pitch, w)
+	_arm.rotation.y = lerpf(IDLE_ARM_YAW, s_arm_yaw, w)
+	_arm.rotation.z = lerpf(0.0, s_arm_roll, w)
+	# Legs: the guard plants a persistent splay (relaxed while walking so the cycle stays
+	# clean); the fore/aft lunge is strike-only. Both fold into the single _apply_stance call.
+	var leg_idle := 1.0 - _last_walk_amt
+	var stance := lerpf(IDLE_STANCE * leg_idle, s_stance, w)
+	var widen := lerpf(IDLE_WIDEN * leg_idle, STANCE_WIDEN, w)
+	_apply_stance(stance, widen)
+	# Knees bend into the crouch at idle (lead knee deeper); straighten as he moves or strikes.
+	# Added on top of the walk flex set_walk() wrote this frame. WarriorSync drops the hips by
+	# CROUCH_DROP to keep the soles planted, so this reads as a sink, not floating feet.
+	var crouch := leg_idle * (1.0 - w)
+	if _knee_l: _knee_l.rotation.x += IDLE_KNEE_LEAD * crouch
+	if _knee_r: _knee_r.rotation.x += IDLE_KNEE_REAR * crouch
 
-# Brace the legs into the strike (one forward, one back — a planted lunge stance), ADDED on
-# top of the walk pose set_walk() already wrote this frame, so it composes without fighting it.
-func _apply_stance(amount: float) -> void:
-	# Fore/aft lunge (signed — alternates the lead foot per swing).
-	if _leg_l: _leg_l.rotation.x += LEG_SWING * STANCE * amount
-	if _leg_r: _leg_r.rotation.x -= LEG_SWING * STANCE * amount
-	# Lateral foot splay (unsigned) — a wide planted power stance that reads clearly from the
-	# iso camera even with the surcoat. This is the big "reads harder" win for the legs.
-	var widen := STANCE_WIDEN * absf(amount)
+# Pose the legs: a signed fore/aft lunge (added on top of the walk pose set_walk() wrote
+# this frame, so it composes without fighting it) plus an explicit lateral splay. The splay
+# is the big "reads harder" win for the legs at iso scale — it carries both the planted idle
+# guard and the wide power stance of a strike.
+func _apply_stance(stance: float, widen: float) -> void:
+	if _leg_l: _leg_l.rotation.x += LEG_SWING * STANCE * stance
+	if _leg_r: _leg_r.rotation.x -= LEG_SWING * STANCE * stance
 	if _leg_l: _leg_l.rotation.z = -widen
 	if _leg_r: _leg_r.rotation.z = widen
 
