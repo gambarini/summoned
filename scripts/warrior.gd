@@ -9,9 +9,10 @@ const RUN_MULTIPLIER := 1.8   # Left Shift held — sprint speed scale over walk
 const DASH_SPEED := 320.0
 const DASH_DURATION := 0.18
 const DASH_COOLDOWN := 0.7
-# Stylish swing cycle — each attack press advances the step (slash / reverse / thrust);
-# purely a presentation variety counter, distinct from the gameplay `chain` resource.
-const COMBO_LEN := 3
+# Stylish swing cycle — each attack press advances the step; a continuous 4-beat
+# flourish whose blade sweeps across the body (left->right, right->top, top->down,
+# back-left). Purely a presentation variety counter, distinct from the gameplay `chain`.
+const COMBO_LEN := 4
 
 # Vertical hover bob + horizontal sway — driven here in GDScript (not the shader)
 # so the Hollow nodes ride the same offset and stay welded to the chest. Phase is
@@ -297,9 +298,16 @@ func vfx_state() -> String:
 	return State.keys()[_state]
 
 ## Presentation hook (read by the 3D `WarriorSync`): the current combo swing index
-## (0 slash, 1 reverse, 2 thrust) so the mesh picks a distinct swing per press.
+## (0 left->right, 1 right->top, 2 top->down, 3 back-left) so the mesh picks a
+## distinct directional swing per press.
 func vfx_combo_step() -> int:
 	return _combo_step
+
+## Presentation hook (read by the 3D `WarriorSync`): the aim direction of the current
+## attack (mouse-driven), in sim space. The 3D mesh turns to face this so the body — and
+## the swing arc sweeping across it — centre on the cursor, not the last-move heading.
+func vfx_attack_dir() -> Vector2:
+	return _attack_dir
 
 func _read_dir() -> Vector2:
 	if input_provider.is_valid():
@@ -411,14 +419,14 @@ func _enter_state(new: State) -> void:
 			_show_anim()
 			_spawn_attack_arc()
 			_play_dir("active")
-			# The thrust finisher (step 2) lands heavier — a longer active window. Compute from
-			# the saved base, not $ActiveTimer.wait_time (start() mutates it -> would compound).
-			$ActiveTimer.start(_active_base * (1.5 if _combo_step == 2 else 1.0))
+			# The finisher (step 3, the back-left strike) lands heavier — a longer active window.
+			# Compute from the saved base, not $ActiveTimer.wait_time (start() mutates it -> compound).
+			$ActiveTimer.start(_active_base * (1.5 if _combo_step == 3 else 1.0))
 		State.ATTACK_RECOVERY:
 			_show_anim()
 			_play_dir("recovery")
 			_start_idle_pulse()
-			$RecoveryTimer.start(_recovery_base * (1.5 if _combo_step == 2 else 1.0))
+			$RecoveryTimer.start(_recovery_base * (1.5 if _combo_step == 3 else 1.0))
 		State.ECHO_ACTIVE:
 			_show_anim()
 			_stop_idle_pulse()
@@ -799,7 +807,8 @@ func _try_attack() -> void:
 	if not $AttackCooldown.is_stopped():
 		return
 	# Combo: a fresh attack starts the cycle at the first swing; chaining out of
-	# recovery advances to the next stylish swing (slash -> reverse -> thrust).
+	# recovery advances to the next stylish swing (left->right -> right->top ->
+	# top->down -> back-left), looping back to the first.
 	if _state in [State.IDLE, State.MOVE, State.ECHO_ACTIVE]:
 		_combo_step = 0
 		_change_state(State.ATTACK_STARTUP)
@@ -818,8 +827,8 @@ func _spawn_attack_arc() -> void:
 	arc.global_position = global_position
 	arc.set_direction(_attack_dir)
 	arc.hit_target.connect(_on_hit)
-	# Harmonic Burst fires on the thrust finisher or a maxed landed-hit chain.
-	if _combo_step == 2 or chain == 4:
+	# Harmonic Burst fires on the back-left finisher (step 3) or a maxed landed-hit chain.
+	if _combo_step == 3 or chain == 4:
 		_do_burst()
 
 func _on_hit(area: Area2D) -> void:

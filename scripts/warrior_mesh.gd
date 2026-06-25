@@ -38,6 +38,19 @@ const STANCE := 1.5          # fore/aft leg brace as a fraction of LEG_SWING (de
 const STANCE_WIDEN := 0.42   # rad (~24°) lateral foot splay — a wide planted power stance
 const BODY_SINK := 0.16      # how far the body drops into the cut (local units)
 
+# Per-step strike END waypoints — the pose the blade/body LANDS in at the peak (w=1) of
+# each swing. Each swing sweeps from the PREVIOUS step's landing (step 0 from the guard,
+# step N from STRIKE_ENDS[N-1]), so the blade flows across the body in a continuous 4-beat
+# flourish: [0] left->right, [1] right->top, [2] top->down, [3] back-left. The chain loops
+# (a 5th press re-cocks from the guard). Fields:
+#   arm_pitch, arm_yaw, arm_roll, torso_twist, torso_lean, sink, stance, widen.
+const STRIKE_ENDS := [
+	[-1.6, -1.9, 0.0, -0.78,  0.26, BODY_SINK,       -1.0, STANCE_WIDEN],         # 0 horizontal slash (lands left)
+	[-2.9, -0.4, 0.0,  0.20, -0.06, -0.05,            0.4, STANCE_WIDEN * 0.6],   # 1 rises to overhead
+	[ 0.20, 0.0, 0.0,  0.0,   TORSO_LEAN * 1.5, BODY_SINK * 1.5, -0.8, STANCE_WIDEN],  # 2 overhead chop down
+	[-1.6,  2.0, 0.0,  0.78,  0.26, BODY_SINK,        1.0, STANCE_WIDEN],         # 3 horizontal finisher (lands right)
+]
+
 # Combat-ready idle guard — the t=0 endpoint of set_attack(). Instead of standing limp
 # with the sword hanging point-down, the warrior holds a guard: blade raised toward the
 # threat, shoulders bladed, weight forward, feet planted. The tuned strike poses blend
@@ -156,7 +169,7 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	# Sword on a shoulder pivot UNDER the torso, so the torso twist carries the arm + blade.
 	# Long two-hand handle: the grip pivot (arm origin) sits between the two hands.
 	_arm = _pivot(Vector3(0.40, 1.55, 0.12), _torso)
-	_box(Vector3(0.14, 1.62, 0.06), Vector3(0.0, -0.92, 0.0), blade, 0.0, 0.0, _arm)   # blade
+	_box(Vector3(0.14, 2.30, 0.06), Vector3(0.0, -1.26, 0.0), blade, 0.0, 0.0, _arm)   # blade (long — top stays at the crossguard, tip extends down)
 	_box(Vector3(0.36, 0.08, 0.12), Vector3(0.0, -0.11, 0.0), lit, 0.0, 0.0, _arm)     # crossguard
 	_box(Vector3(0.08, 0.11, 0.08), Vector3(0.0, 0.34, 0.0), armor, 0.0, 0.0, _arm)    # pommel
 	# TWO-HANDED grip: right hand high on the handle, left (off) hand below it. Both are
@@ -166,7 +179,7 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	# Blade-tip socket: the far end of the blade. The slash arc spawns here in WarriorSync,
 	# riding the swing as the arm turns.
 	_sword_tip = Node3D.new()
-	_sword_tip.position = Vector3(0.0, -1.73, 0.0)
+	_sword_tip.position = Vector3(0.0, -2.41, 0.0)
 	_arm.add_child(_sword_tip)
 
 	# Off (left) forearm bridging back toward the body from the lower hand. Parented to the
@@ -190,67 +203,47 @@ func set_walk(phase: float, amount: float) -> void:
 	if _knee_r: _knee_r.rotation.x = (0.5 - 0.5 * cos(phase + PI)) * KNEE_WALK * amount
 
 
-## Attack swing: `t` 0 (rest) .. 1 (full forward strike). Negative = windup back. `step`
-## picks the swing: 0 slash, 1 reverse slash, 2 thrust. The cut is a kinetic chain — the
-## torso (hips->shoulders) coils on the windup and whips through on the strike, the body
-## leans and sinks into it, the legs brace, and the arm only LEADS on top. A slash and its
-## reverse whip the body opposite ways (reusing momentum); the thrust drives straight in.
+## Attack swing: `t` 0 (rest / combat guard) .. 1 (full strike). `step` picks the swing —
+## 0 left->right, 1 right->top, 2 top->down, 3 back-left — and each swing sweeps from the
+## PREVIOUS step's landing pose (step 0 from the guard) to this step's, so a chained combo
+## reads as one continuous flourish whipping across the body instead of four resets. The
+## cut is a kinetic chain: the torso (hips->shoulders) drives, the body leans/sinks, the
+## legs brace, and the arm only LEADS on top. (WarriorSync zeroes the swing param on each
+## step change so the new swing starts clean from its windup, completing the prior arc.)
 func set_attack(t: float, step := 0) -> void:
 	if _torso == null:
 		return
-	# w carries ALL the strike's t-dependence: 0 = idle guard, 1 = the exact tuned strike.
-	# (t<0 is the brief windup — it holds the guard rather than dipping.)
+	# w 0 = the swing's START pose (idle guard for step 0), 1 = its END (the landing).
 	var w := clampf(t, 0.0, 1.0)
-	# Per-step strike targets are the absolute t=1 values, so lerp(idle, strike, 1) == strike.
-	var s_arm_pitch: float
-	var s_arm_yaw: float
-	var s_arm_roll := 0.0
-	var s_torso_twist: float
-	var s_torso_lean: float
-	var s_sink: float
-	var s_stance: float   # fore/aft lunge (signed); engages only as the strike lands
-	match step:
-		1:  # reverse slash — body whips the opposite way to the basic slash
-			s_arm_pitch = -ARM_RAISE * 0.95
-			s_arm_yaw = -SWING_YAW
-			s_torso_twist = -TORSO_TWIST
-			s_torso_lean = TORSO_LEAN
-			s_sink = BODY_SINK
-			s_stance = -1.0
-		2:  # thrust finisher — hips square, drive straight in: deep lean + sink, no twist
-			s_arm_pitch = -ARM_RAISE * 1.1
-			s_arm_yaw = 0.0
-			s_arm_roll = 0.18
-			s_torso_twist = 0.0
-			s_torso_lean = TORSO_LEAN * 1.6
-			s_sink = BODY_SINK * 1.5
-			s_stance = 1.0
-		_:  # slash — torso whips through, the blade leads the cut across the body
-			s_arm_pitch = -ARM_RAISE * 0.95
-			s_arm_yaw = SWING_YAW
-			s_torso_twist = TORSO_TWIST
-			s_torso_lean = TORSO_LEAN
-			s_sink = BODY_SINK
-			s_stance = 1.0
-	# Blend the combat-ready guard out into the strike as w rises.
-	_torso.rotation.y = lerpf(IDLE_TORSO_TWIST, s_torso_twist, w)
-	_torso.rotation.x = lerpf(IDLE_TORSO_LEAN, s_torso_lean, w)
-	_torso.position.y = lerpf(0.0, -s_sink, w)
-	_arm.rotation.x = lerpf(IDLE_ARM_PITCH, s_arm_pitch, w)
-	_arm.rotation.y = lerpf(IDLE_ARM_YAW, s_arm_yaw, w)
-	_arm.rotation.z = lerpf(0.0, s_arm_roll, w)
-	# Legs: the guard plants a persistent splay (relaxed while walking so the cycle stays
-	# clean); the fore/aft lunge is strike-only. Both fold into the single _apply_stance call.
 	var leg_idle := 1.0 - _last_walk_amt
-	var stance := lerpf(IDLE_STANCE * leg_idle, s_stance, w)
-	var widen := lerpf(IDLE_WIDEN * leg_idle, STANCE_WIDEN, w)
-	_apply_stance(stance, widen)
+	# Sweep from the previous swing's landing to this swing's — the heart of the cross-body flow.
+	var a := _swing_waypoint(step - 1, leg_idle)   # START (guard for step 0)
+	var b := _swing_waypoint(step, leg_idle)        # END (this swing's landing)
+	_arm.rotation.x = lerpf(a[0], b[0], w)
+	_arm.rotation.y = lerpf(a[1], b[1], w)
+	_arm.rotation.z = lerpf(a[2], b[2], w)
+	_torso.rotation.y = lerpf(a[3], b[3], w)
+	_torso.rotation.x = lerpf(a[4], b[4], w)
+	_torso.position.y = lerpf(-a[5], -b[5], w)   # positive sink = body drops into the cut
+	# Legs: the guard plants a persistent splay (relaxed while walking); the fore/aft lunge
+	# is strike-only. Both fold into the single _apply_stance call, sweeping with the swing.
+	_apply_stance(lerpf(a[6], b[6], w), lerpf(a[7], b[7], w))
 	# Knees bend into the crouch at idle (lead knee deeper); straighten as he moves or strikes.
 	# Added on top of the walk flex set_walk() wrote this frame. WarriorSync drops the hips by
 	# CROUCH_DROP to keep the soles planted, so this reads as a sink, not floating feet.
 	var crouch := leg_idle * (1.0 - w)
 	if _knee_l: _knee_l.rotation.x += IDLE_KNEE_LEAD * crouch
 	if _knee_r: _knee_r.rotation.x += IDLE_KNEE_REAR * crouch
+
+
+# One end of a swing as a flat pose array (field order matches STRIKE_ENDS). `step` -1 (or
+# out of range) is the combat-ready idle guard — the resting pose between combos AND swing
+# 0's windup; its leg stagger/splay relaxes by `leg_idle` so the walk cycle stays clean.
+func _swing_waypoint(step: int, leg_idle: float) -> Array:
+	if step < 0 or step >= STRIKE_ENDS.size():
+		return [IDLE_ARM_PITCH, IDLE_ARM_YAW, 0.0, IDLE_TORSO_TWIST, IDLE_TORSO_LEAN,
+			0.0, IDLE_STANCE * leg_idle, IDLE_WIDEN * leg_idle]
+	return STRIKE_ENDS[step]
 
 # Pose the legs: a signed fore/aft lunge (added on top of the walk pose set_walk() wrote
 # this frame, so it composes without fighting it) plus an explicit lateral splay. The splay

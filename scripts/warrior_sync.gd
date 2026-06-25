@@ -84,6 +84,7 @@ var _bob_y := 0.0  # current hover offset; the Hollow node rides this too
 var _walk_phase := 0.0
 var _walk_amt := 0.0
 var _atk := 0.0
+var _prev_combo_step := 0   # detect a combo step advance to restart the swing param
 var _recoil := 0.0   # hurt knockback (0..1), eased
 # Form: 1 = whole (idle), 0 = collapsed to nothing. DYING eases it 1->0 (the mesh
 # crumples + sinks, the chest wound shrinks with it, the score-debris scatters);
@@ -276,8 +277,9 @@ func _make_ground_ring(radius: float, thickness: float, steps := 40) -> ArrayMes
 # The arc of dissonance now exits the blade, not the floor: a crescent ribbon
 # parented to the mesh's sword-tip socket, so it rides the swing as the arm follows
 # through. Additive dissonance purple (the notation/pull hue) so it snaps cleanly.
-# Shape varies per combo step — a wide crescent for the two slashes, a narrow spike
-# for the thrust finisher. Collision is unchanged (the 2D AttackArc HitArea owns it).
+# Shape varies per combo step so each directional cut reads distinctly — wide crescents
+# for the horizontal slashes, a focused longer arc for the overhead chop. Collision is
+# unchanged (the 2D AttackArc HitArea owns it).
 const SLASH_COLOR := Color(0.627, 0.502, 0.878)   # #a080e0
 const SLASH_DURATION := 0.22
 
@@ -302,11 +304,20 @@ func _spawn_slash(step: int) -> void:
 
 
 # Crescent ribbon in the tip's local XZ plane (the plane the blade tip sweeps), so it
-# fans out from the blade edge. Thrust (step 2) is a narrow forward spike instead.
+# fans out from the blade edge. Span/reach vary per swing to match the four directions.
 func _make_slash_mesh(step: int) -> ArrayMesh:
-	var span: float = deg_to_rad(44.0) if step == 2 else deg_to_rad(140.0)
-	var inner: float = 0.18 if step == 2 else 0.34
-	var outer: float = 1.4 if step == 2 else 1.05
+	var span: float
+	var inner: float
+	var outer: float
+	match step:
+		1:  # right->top: a rising fan, medium spread
+			span = deg_to_rad(118.0); inner = 0.32; outer = 1.10
+		2:  # top->down overhead chop: narrower but longer reach
+			span = deg_to_rad(80.0); inner = 0.24; outer = 1.40
+		3:  # back-left finisher: the widest, most emphatic crescent
+			span = deg_to_rad(155.0); inner = 0.36; outer = 1.15
+		_:  # 0 left->right horizontal slash
+			span = deg_to_rad(140.0); inner = 0.34; outer = 1.05
 	var steps := 18
 	var verts := PackedVector3Array()
 	for i in range(steps + 1):
@@ -622,7 +633,7 @@ func _process(delta: float) -> void:
 		_bob_y = sin(_bob_phase) * BOB_AMPLITUDE * (1.0 + _walk_amt * 1.6)
 	else:
 		_bob_y = 0.0
-	_sync_facing()
+	_sync_facing(delta)
 	_sync_position()
 	# World-space emitter follows the warrior; emitted glyphs stay put -> trail. The
 	# emitter rides the collapsing chest so the death disperse comes off the figure.
@@ -689,8 +700,16 @@ func _animate(delta: float) -> void:
 		"ATTACK_STARTUP": atk_target = -0.25
 		"ATTACK_ACTIVE": atk_target = 1.0
 		"ATTACK_RECOVERY": atk_target = 0.35
+	# Restart the swing param when the combo step advances, so each new swing begins clean
+	# from its windup pose (snapping the prior arc to completion) rather than popping at a
+	# mid-swing value when the step flips during recovery — this is what gives the chained
+	# flourish its continuous cross-body flow.
+	var cs: int = _warrior.vfx_combo_step()
+	if cs != _prev_combo_step:
+		_atk = 0.0
+		_prev_combo_step = cs
 	_atk = move_toward(_atk, atk_target, delta * ATTACK_RATE)
-	_mesh.set_attack(_atk, _warrior.vfx_combo_step())
+	_mesh.set_attack(_atk, cs)
 
 	# Hurt: a snappy backward jolt (applied as a position recoil in _sync_position).
 	_recoil = move_toward(_recoil, 1.0 if s == "HURT" else 0.0, delta * 16.0)
@@ -740,19 +759,36 @@ func _update_notation_emission(s: String) -> void:
 # — the fencer's profile the stance asks for. Faded out as he moves or strikes so he squares
 # up to his facing to act; the Hollow gate still keys off `_face_dir`, not this visual yaw.
 const STANCE_YAW := 0.5
+const TURN_RATE := 30.0   # how fast (rad-ease/s) the body pivots to face the aim on an attack
 
-# The mesh faces its WORLD-absolute movement heading (true 3D). `_facing` — the
-# camera-relative 8-dir name driving the Hollow visibility gate — is re-derived
-# from that heading EVERY frame (not just on movement), so orbiting the camera
-# while idle correctly hides the front-of-chest wound when his back turns to us.
-func _sync_facing() -> void:
+# The mesh faces its WORLD-absolute movement heading (true 3D) — EXCEPT while attacking,
+# when it turns to the mouse-driven aim so the body, and the swing arc that sweeps across
+# it, centre on the cursor rather than the last-move heading. `_facing` (the camera-relative
+# 8-dir name driving the Hollow gate) is re-derived from that heading EVERY frame, so
+# orbiting the camera while idle correctly hides the front-of-chest wound when his back
+# turns to us.
+func _sync_facing(delta := 0.0) -> void:
 	var v := _warrior.velocity
 	if v.length() >= MOVE_EPSILON:
 		_face_dir = Vector2(v.x, v.y).normalized()
+	# While attacking, turn to the aim (cursor) and hold it through the combo/recovery — the
+	# aim is the centre the swing sweeps across, so the body must square to it, not the heading.
+	var s: String = _warrior.vfx_state()
+	var attacking := s == "ATTACK_STARTUP" or s == "ATTACK_ACTIVE" or s == "ATTACK_RECOVERY"
+	if attacking:
+		var adir: Vector2 = _warrior.vfx_attack_dir()
+		if adir.length() > 0.01:
+			_face_dir = adir.normalized()
 	# +Z is the mesh's front; rotate it onto (face_dir.x, face_dir.y) in world (x,z), then
 	# add the idle bladed-stance turn (full when standing, gone when moving/striking).
 	var blade := (1.0 - _walk_amt) * (1.0 - clampf(_atk, 0.0, 1.0))
-	_mesh.rotation.y = atan2(_face_dir.x, _face_dir.y) + STANCE_YAW * blade
+	var target_y := atan2(_face_dir.x, _face_dir.y) + STANCE_YAW * blade
+	# Ease the pivot into an attack so the body visibly turns to the cursor; snap otherwise
+	# (movement facing stays instant, as before).
+	if attacking and delta > 0.0:
+		_mesh.rotation.y = lerp_angle(_mesh.rotation.y, target_y, clampf(TURN_RATE * delta, 0.0, 1.0))
+	else:
+		_mesh.rotation.y = target_y
 	var dir_name := _rig.facing_name(_face_dir)
 	if dir_name != "":
 		_facing = dir_name
