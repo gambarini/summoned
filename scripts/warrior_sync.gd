@@ -85,6 +85,9 @@ var _walk_phase := 0.0
 var _walk_amt := 0.0
 var _atk := 0.0
 var _prev_combo_step := 0   # detect a combo step advance to restart the swing param
+var _hitstop := 0.0   # seconds of swing-freeze remaining after a landed hit (impact feel)
+var _relax := 0.0     # guard-return progress (1 = combo-end pose, 0 = idle guard) — Phase C
+var _was_attacking := false   # edge-detect the combo end to start the guard return
 var _recoil := 0.0   # hurt knockback (0..1), eased
 # Form: 1 = whole (idle), 0 = collapsed to nothing. DYING eases it 1->0 (the mesh
 # crumples + sinks, the chest wound shrinks with it, the score-debris scatters);
@@ -205,6 +208,7 @@ func setup(rig: IsoRig, warrior: CharacterBody2D, ember_tint := EMBER_TINT_DEFAU
 	# 2D rings drawn over the iso view (Phase 2b).
 	_warrior.suppress_world_vfx = true
 	_warrior.ground_pulse.connect(_on_ground_pulse)
+	_warrior.melee_hit.connect(_on_melee_hit)   # landed-hit hitstop (presentation-only)
 
 	_setup_notation()  # the drifting-score-debris identity, as 3D particles
 	_setup_hollow()    # the burning chest wound (gated on facing + stress)
@@ -277,9 +281,9 @@ func _make_ground_ring(radius: float, thickness: float, steps := 40) -> ArrayMes
 # The arc of dissonance now exits the blade, not the floor: a crescent ribbon
 # parented to the mesh's sword-tip socket, so it rides the swing as the arm follows
 # through. Additive dissonance purple (the notation/pull hue) so it snaps cleanly.
-# Shape varies per combo step so each directional cut reads distinctly — wide crescents
-# for the horizontal slashes, a focused longer arc for the overhead chop. Collision is
-# unchanged (the 2D AttackArc HitArea owns it).
+# Shape varies per combo step so each beat reads distinctly — wide crescents for the
+# horizontal cuts, a focused arc for the overhead chop, and a narrow forward spike for the
+# thrust finisher. Collision is unchanged (the 2D AttackArc HitArea owns it).
 const SLASH_COLOR := Color(0.627, 0.502, 0.878)   # #a080e0
 const SLASH_DURATION := 0.22
 
@@ -314,8 +318,8 @@ func _make_slash_mesh(step: int) -> ArrayMesh:
 			span = deg_to_rad(118.0); inner = 0.32; outer = 1.10
 		2:  # top->down overhead chop: narrower but longer reach
 			span = deg_to_rad(80.0); inner = 0.24; outer = 1.40
-		3:  # back-left finisher: the widest, most emphatic crescent
-			span = deg_to_rad(155.0); inner = 0.36; outer = 1.15
+		3:  # thrust finisher: a narrow forward spike (not a crescent) — the point driving out
+			span = deg_to_rad(40.0); inner = 0.20; outer = 1.55
 		_:  # 0 left->right horizontal slash
 			span = deg_to_rad(140.0); inner = 0.34; outer = 1.05
 	var steps := 18
@@ -662,7 +666,15 @@ func _sync_position() -> void:
 # Procedural animation: walk cycle from velocity, sword swing from the attack states,
 # cape sway from both. No skeleton — these rotate the mesh's leg/arm/cape pivots.
 const WALK_FREQ := 9.0       # rad/s leg cadence at full speed
-const ATTACK_RATE := 14.0    # how fast the sword eases toward its per-state target
+# Per-phase swing rates: a slow draw-back on startup (anticipation dwell), an explosive drive
+# through the active hit, and an eased settle on recovery. One flat rate read as a weightless
+# constant-velocity sweep; splitting it is half the "weight" pass (the mesh's _ease_strike
+# curve, peaking at ~62% of the arc, is the other half).
+const WINDUP_RATE := 7.0
+const STRIKE_RATE := 26.0
+const RECOVER_RATE := 9.0
+const HITSTOP_DURATION := 0.07   # seconds the swing freezes at the contact pose on a landed hit
+const RELAX_RATE := 6.0      # guard-return settle speed (combo end -> idle guard), ~0.17s
 const REF_SPEED := 100.0     # warrior px/s at full move (paces the cadence)
 # Death/summon form arc. FORM_RATE traverses 0<->1 in ~2.2s so the collapse/assemble
 # completes just under the 2.5s Dying/Summoning timers (no pop when the timer fires).
@@ -678,6 +690,12 @@ const NOTATION_DISPERSE_UNTIL := 0.5  # _form_eased below which death emission c
 # `_NOTATION_TIER_SCALE` is widened here so the density delta reads at iso scale.
 const NOTATION_RATIO_BY_TIER := [0.30, 0.45, 0.65, 0.85]
 const HOLLOW_COHERENCE_GAIN := 0.30   # Hollow radius x(1 .. 1.30) from whole -> raw
+
+## A melee swing landed a CORRECT hit — freeze the swing briefly so the impact reads as force
+## (consumed in _animate). Presentation-only; wired from warrior.gd's `melee_hit` in setup().
+func _on_melee_hit() -> void:
+	_hitstop = HITSTOP_DURATION
+
 
 func _animate(delta: float) -> void:
 	var speed := _warrior.velocity.length()
@@ -695,21 +713,53 @@ func _animate(delta: float) -> void:
 	if s == "ATTACK_ACTIVE" and _prev_state_for_arc != "ATTACK_ACTIVE":
 		_spawn_slash(_warrior.vfx_combo_step())
 	_prev_state_for_arc = s
+	var attacking := s == "ATTACK_STARTUP" or s == "ATTACK_ACTIVE" or s == "ATTACK_RECOVERY"
+	# Guard-return relax (Phase C): when a combo ends, ease the figure from its EXACT final
+	# pose back to the idle guard instead of snapping. Snapshot once on the attack->idle edge;
+	# a new swing cancels any pending relax.
+	if _was_attacking and not attacking:
+		_mesh.begin_guard_return()
+		_relax = 1.0
+		_atk = 0.0
+	if attacking:
+		_relax = 0.0
+	_was_attacking = attacking
 	var atk_target := 0.0
+	var rate := RECOVER_RATE
 	match s:
-		"ATTACK_STARTUP": atk_target = -0.25
-		"ATTACK_ACTIVE": atk_target = 1.0
-		"ATTACK_RECOVERY": atk_target = 0.35
+		"ATTACK_STARTUP":
+			atk_target = -0.25
+			rate = WINDUP_RATE
+		"ATTACK_ACTIVE":
+			atk_target = 1.0
+			rate = STRIKE_RATE
+		"ATTACK_RECOVERY":
+			atk_target = 0.35
+			rate = RECOVER_RATE
 	# Restart the swing param when the combo step advances, so each new swing begins clean
 	# from its windup pose (snapping the prior arc to completion) rather than popping at a
 	# mid-swing value when the step flips during recovery — this is what gives the chained
-	# flourish its continuous cross-body flow.
+	# flourish its continuous cross-body flow. Gated to attacking states so the combo-end
+	# reset to step 0 doesn't snap _atk (the relax owns that transition).
 	var cs: int = _warrior.vfx_combo_step()
 	if cs != _prev_combo_step:
-		_atk = 0.0
+		if attacking:
+			_atk = 0.0
+			_hitstop = 0.0
 		_prev_combo_step = cs
-	_atk = move_toward(_atk, atk_target, delta * ATTACK_RATE)
-	_mesh.set_attack(_atk, cs)
+	if _relax > 0.0 and not attacking:
+		# Settle from the captured combo-end pose to the live guard.
+		_relax = move_toward(_relax, 0.0, delta * RELAX_RATE)
+		_mesh.set_guard_return(_relax)
+	elif _hitstop > 0.0:
+		# Hitstop: hold the swing at the contact pose for a beat on a landed hit (set by
+		# _on_melee_hit) so the strike reads as force meeting resistance. Locomotion/cape
+		# still update — only the swing param freezes.
+		_hitstop -= delta
+		_mesh.set_attack(_atk, cs)
+	else:
+		_atk = move_toward(_atk, atk_target, delta * rate)
+		_mesh.set_attack(_atk, cs)
 
 	# Hurt: a snappy backward jolt (applied as a position recoil in _sync_position).
 	_recoil = move_toward(_recoil, 1.0 if s == "HURT" else 0.0, delta * 16.0)

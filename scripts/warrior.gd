@@ -74,6 +74,10 @@ signal resonance_ready(is_ready: bool)
 ## listens and spawns a flat ground disc; in the 2D build no one connects and the
 ## warrior draws the `Polygon2D` ring itself (see `suppress_world_vfx`).
 signal ground_pulse(center: Vector2, radius: float, color: Color)
+## Cosmetic hit confirm (read by the 3D `WarriorSync`): emitted when a melee swing lands a
+## CORRECT hit, so the presentation layer can play a brief hitstop. Purely visual — it gates
+## nothing in the sim and carries no payload (the gameplay path is `chain`/`receive_hit`).
+signal melee_hit
 
 # When true (set by the 3D `WarriorSync`), `_do_resonance`/`_do_burst` emit
 # `ground_pulse` instead of spawning the 2D ring — so the ring becomes a 3D disc
@@ -844,6 +848,7 @@ func _on_hit(area: Area2D) -> void:
 	if result == EnemyScript.HitResult.CORRECT:
 		chain = min(chain + 1, 4)
 		chain_changed.emit(chain)
+		melee_hit.emit()   # presentation-only: lets WarriorSync play hitstop on a landed hit
 	else:
 		_reset_chain()
 
