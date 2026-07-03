@@ -1,8 +1,8 @@
 # Handoff — Ring "scenario" buildout + combat feel
 
 Paste-ready context for continuing in a new session. Two active tracks: the ring
-scenario layer (below, F1–F3/R1c done) and the **combat feel pass** (passes 1–4 done
-2026-07-02; the remaining backlog is in that section).
+scenario layer (below, F1–F3/R1c done) and the **combat feel pass** (passes 1–5 done
+2026-07-02/03; the remaining backlog is in that section).
 
 ## Context
 
@@ -123,15 +123,43 @@ Backlog item 1 (dash identity — range, mesh read, dash-cancel):
   event lacks `physical_keycode`, which the raw-key binding checks. Drive it in tests via
   `w._start_dash()` (+ `w._attack_buffer = 0.3` for the cancel path); real keyboards fine.
 
+## Just completed — Combat feel pass 5: audio (2026-07-03, verified in-engine)
+
+Backlog item "zero audio" — the project's first sounds, all procedural (no imported
+assets, matching the art direction):
+
+- **`scripts/combat_sfx.gd` (new)** — `CombatSfx extends Node`. Synthesizes three
+  `AudioStreamWAV`s at `_ready()` (22 kHz mono, tanh soft-clip, fixed RNG seed so the
+  sounds are identical every session): swing whoosh (two-pole lowpass-swept noise
+  300→2600 Hz under a rise-fall envelope, 0.17s), hit crunch (dark noise burst +
+  72 Hz decaying thump, 0.11s), dash air-burst (reverse sweep 1800→350 Hz, 0.22s).
+  Three `AudioStreamPlayer` children (max_polyphony 3/3/2 so chained tails overlap,
+  don't cut). `play_swing(combo_step)` pitches per step `[1.0, 1.12, 0.94, 0.78]`
+  (thrust finisher drops heavy) ±3% jitter; `play_hit()`/`play_dash()` jitter too.
+- **Wiring** (`warrior_sync.gd`, presentation-only — sim untouched): `_sfx` built in
+  `setup()` via `load()` + dynamic `call()`s (same-session-script rule). Whoosh fires
+  on the existing ATTACK_ACTIVE edge next to `_spawn_slash`; a new DASH edge on the
+  same `_prev_state_for_arc` tracker fires the dash burst; crunch at the top of
+  `_on_melee_hit` — UNGATED (every landed hit crunches; only the hitstop pose-freeze
+  keeps its ACTIVE/RECOVERY gate).
+- Verified live (physics-frame probes): 3 players with exact stream lengths
+  0.17/0.11/0.22s; buffered attack → swing played, `_start_dash()` → dash played,
+  `melee_hit` emit → crunch played; a full 4-beat chain logged per-step pitches
+  1.007/1.123/0.941/0.789 (the designed ladder × jitter); console clean; 43 scripts
+  compile 0 errors.
+- **Numbers-verified only — nobody has LISTENED to these yet.** Volumes (-8/-4/-10 dB)
+  and the synth voicing are placeholder guesses; expect an ears-on tune pass. No
+  sounds yet for: hurt, death/summon, Resonance/Song, enemy-side events, footsteps.
+
 ### Combat feel backlog (reviewed, NOT fixed — priority order)
 
 1. **Windup dead-hold**: `_atk` reaches its windup target in ~0.036s then holds static
    for the rest of the 0.117s startup — reads as input lag, not anticipation.
-2. **Zero audio in the project** (no AudioStream anywhere): swing whoosh + hit crunch is
-   cheaply half of "impact"; even placeholder synth blips would change the feel.
-3. **Resonance (R) / Song (G) have no body animation** on the mesh — only the ground disc.
-4. **Impact extras** (deferred from pass 2): freeze the struck enemy for the hitstop beat;
+2. **Resonance (R) / Song (G) have no body animation** on the mesh — only the ground disc.
+3. **Impact extras** (deferred from pass 2): freeze the struck enemy for the hitstop beat;
    small camera kick on a landed hit (no screen shake exists yet).
+4. **Audio tune pass + coverage** (pass 5 shipped placeholder swing/hit/dash only):
+   ears-on volume/voicing check, then hurt/death/summon/Resonance/Song/enemy sounds.
 
 ## Just completed — F1 (verified in-engine)
 
@@ -283,14 +311,15 @@ mesh-first, no billboard stage). Backlog R1a is done; the Ring-1 P1 creature sli
 
 ## Next — pick one
 
-1. **Combat feel backlog item 2** (audio) — zero AudioStreams in the project; placeholder
-   synth whoosh/crunch blips are the cheapest remaining "impact" win.
-2. **Enemy placeholders → meshes** — enemy.gd/fleer/phaser still render as flat billboard
-   tokens next to two mesh creatures; same dispatch seam makes this incremental.
-3. **P1 gate check, then C-track** — the Ring-1 slice (R1a/R1b/R1c) is done: play it and
+1. **P1 gate check, then C-track** — the Ring-1 slice (R1a/R1b/R1c) is done: play it and
    judge whether read→avoid/intervene feels good BEFORE generalizing (C1 coherence,
    C2 echo chain, C3 structured generator). The backlog's gate says fix combat design
-   here while it's cheap.
+   here while it's cheap. Fold an ears-on listen of the new pass-5 audio into the same
+   playthrough — it has only been numbers-verified.
+2. **Enemy placeholders → meshes** — enemy.gd/fleer/phaser still render as flat billboard
+   tokens next to two mesh creatures; same dispatch seam makes this incremental.
+3. **Combat feel backlog item 1** (windup dead-hold) — the last purely-mechanical feel
+   item; the others now want eyes/ears-on judgment first.
 
 ## Gotchas
 

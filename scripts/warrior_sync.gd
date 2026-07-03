@@ -107,6 +107,8 @@ var _hollow_ember: MeshInstance3D
 var _hollow_ember_mat: StandardMaterial3D
 var _hollow_pull: GPUParticles3D
 var _hollow_pulse := 0.0
+# Placeholder combat audio (combat_sfx.gd, same-session script -> load() + call()).
+var _sfx: Node = null
 
 
 ## Current 8-dir sheet name (for verification / debugging).
@@ -210,6 +212,12 @@ func setup(rig: IsoRig, warrior: CharacterBody2D, ember_tint := EMBER_TINT_DEFAU
 	_warrior.suppress_world_vfx = true
 	_warrior.ground_pulse.connect(_on_ground_pulse)
 	_warrior.melee_hit.connect(_on_melee_hit)   # landed-hit hitstop (presentation-only)
+
+	# Placeholder combat audio: procedural synth blips (swing/hit/dash), presentation-
+	# side like the hitstop — the sim emits the same signals it always did.
+	_sfx = load("res://scripts/combat_sfx.gd").new()
+	_sfx.name = "CombatSfx"
+	add_child(_sfx)
 
 	_setup_notation()  # the drifting-score-debris identity, as 3D particles
 	_setup_hollow()    # the burning chest wound (gated on facing + stress)
@@ -714,6 +722,10 @@ const HOLLOW_COHERENCE_GAIN := 0.30   # Hollow radius x(1 .. 1.30) from whole ->
 ## Gated to the strike pose (active/recovery): a hit that arrives after the state moved on
 ## (the arc's fade frames landing as the NEXT swing winds up) must not freeze the wrong pose.
 func _on_melee_hit() -> void:
+	# The crunch plays for EVERY landed hit (a stale hit still connected); only the
+	# pose-freeze below is gated to the strike pose.
+	if _sfx:
+		_sfx.call("play_hit")
 	var s: String = _warrior.vfx_state()
 	if s == "ATTACK_ACTIVE" or s == "ATTACK_RECOVERY":
 		_hitstop = HITSTOP_DURATION
@@ -734,6 +746,11 @@ func _animate(delta: float) -> void:
 	# parents to the tip socket, so it rides the swing as the arm follows through.
 	if s == "ATTACK_ACTIVE" and _prev_state_for_arc != "ATTACK_ACTIVE":
 		_spawn_slash(_warrior.vfx_combo_step())
+		if _sfx:
+			_sfx.call("play_swing", _warrior.vfx_combo_step())
+	elif s == "DASH" and _prev_state_for_arc != "DASH":
+		if _sfx:
+			_sfx.call("play_dash")
 	_prev_state_for_arc = s
 	var attacking := s == "ATTACK_STARTUP" or s == "ATTACK_ACTIVE" or s == "ATTACK_RECOVERY"
 	# Guard-return relax (Phase C): when a combo ends, ease the figure from its EXACT final
