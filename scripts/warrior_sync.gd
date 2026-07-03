@@ -89,6 +89,7 @@ var _hitstop := 0.0   # seconds of swing-freeze remaining after a landed hit (im
 var _relax := 0.0     # guard-return progress (1 = combo-end pose, 0 = idle guard) — Phase C
 var _was_attacking := false   # edge-detect the combo end to start the guard return
 var _recoil := 0.0   # hurt knockback (0..1), eased
+var _dash_lean: float = 0.0   # dash body-lean (0..1), eased
 # Form: 1 = whole (idle), 0 = collapsed to nothing. DYING eases it 1->0 (the mesh
 # crumples + sinks, the chest wound shrinks with it, the score-debris scatters);
 # SUMMONING snaps it to 0 then eases 0->1 (assembles, final pose = idle). The warrior
@@ -630,11 +631,12 @@ func _camera_dir() -> Vector2:
 # Visual sync runs after physics, so it reads the body's post-move state.
 func _process(delta: float) -> void:
 	_animate(delta)   # updates _walk_phase/_walk_amt/_atk + the leg/sword/cape pivots
-	# Hover bob, with a stronger step-bounce while walking (the leg swing is hidden
-	# by the surcoat at this scale, so the bounce carries the locomotion read).
+	# Hover bob. The walk boost is modest now — the footfall rhythm comes from the mesh's
+	# pose_drop() grounding (the body dips as the legs split, rises as they pass), so this
+	# slow sine no longer has to fake the step read; it stays the song-being's float.
 	if _warrior.vfx_hover_active():
 		_bob_phase += BOB_SPEED * (1.0 + _walk_amt) * delta
-		_bob_y = sin(_bob_phase) * BOB_AMPLITUDE * (1.0 + _walk_amt * 1.6)
+		_bob_y = sin(_bob_phase) * BOB_AMPLITUDE * (1.0 + _walk_amt * 0.8)
 	else:
 		_bob_y = 0.0
 	_sync_facing(delta)
@@ -646,36 +648,52 @@ func _process(delta: float) -> void:
 	_update_hollow(delta)
 
 
-const LUNGE_PX := 12.0   # forward hop on the strike (back on the windup) — reads as a lunge
+# The strike lunge is now REAL sim motion (warrior.gd's ATTACK_STEP_SPEED) — the mesh
+# just tracks the body, so the old visual-only LUNGE_PX offset (which drew the figure
+# 12px ahead of its own hitbox) is gone. Hurt recoil remains presentation-only.
 const RECOIL_PX := 6.0   # backward jolt on hurt
-# Idle crouch: how far the hips drop as the knees bend (world units), so the soles stay
-# planted and it reads as a sink into the stance rather than feet lifting off the ground.
-# Matched to the mesh's IDLE_KNEE_* bend; fades out with the same weight as the stance blade.
-const CROUCH_DROP := 0.16
 
 func _sync_position() -> void:
-	# Attack lunges forward along the facing; hurt jolts backward. (Both in sim px.)
-	var push := _atk * LUNGE_PX - _recoil * RECOIL_PX
+	# Hurt jolts the figure backward (sim px, presentation-only).
+	var push: float = -_recoil * RECOIL_PX
 	var sim := _warrior.global_position + _face_dir * push
-	# Drop the hips while crouched (idle, not moving/striking) so the bent-knee soles stay down.
-	var crouch := (1.0 - _walk_amt) * (1.0 - clampf(_atk, 0.0, 1.0))
 	# _form_sink drops him into the plateau on death (and lifts him out of it on summon).
-	_mesh.position = SimSpace.to_world(sim, FEET_Y + _bob_y - _form_sink - CROUCH_DROP * crouch)
+	# pose_drop() is the mesh's per-frame grounding — the support-leg lift of the CURRENT
+	# pose (idle crouch, walk split, strike lunge alike) — so the planted sole stays on the
+	# plateau through every stance instead of only the fixed idle case the old CROUCH_DROP
+	# covered. It also gives the walk its true per-step dip (lowest at double support).
+	_mesh.position = SimSpace.to_world(sim, FEET_Y + _bob_y - _form_sink - _mesh.pose_drop())
 
 
 # Procedural animation: walk cycle from velocity, sword swing from the attack states,
 # cape sway from both. No skeleton — these rotate the mesh's leg/arm/cape pivots.
 const WALK_FREQ := 9.0       # rad/s leg cadence at full speed
-# Per-phase swing rates: a slow draw-back on startup (anticipation dwell), an explosive drive
-# through the active hit, and an eased settle on recovery. One flat rate read as a weightless
+# Per-phase swing rates: a slow draw-back on startup (anticipation dwell), a fast drive
+# through the active hit, and a slow settle on recovery. One flat rate read as a weightless
 # constant-velocity sweep; splitting it is half the "weight" pass (the mesh's _ease_strike
-# curve, peaking at ~62% of the arc, is the other half).
+# curve, peaking at ~62% of the arc, is the other half). STRIKE_RATE 12 plays the whip in
+# ~0.10s (≈ the 0.11s active window) — fast but *visible*; the old 26 finished the whole
+# arc in ~3 frames and read as a jerky pop. RECOVER_RATE is gentle because recovery now
+# HOLDS near the landing pose (see atk_target below) rather than pulling the blade back.
 const WINDUP_RATE := 7.0
-const STRIKE_RATE := 26.0
-const RECOVER_RATE := 9.0
+const STRIKE_RATE := 12.0
+const RECOVER_RATE := 2.5
 const HITSTOP_DURATION := 0.07   # seconds the swing freezes at the contact pose on a landed hit
 const RELAX_RATE := 6.0      # guard-return settle speed (combo end -> idle guard), ~0.17s
 const REF_SPEED := 100.0     # warrior px/s at full move (paces the cadence)
+# Dash read: the figure pitches into the dash direction (rotation about the local X,
+# post-yaw, pivoting at the feet) so the burst reads as a committed lunge, not fast
+# sliding. The lean snaps in hard and settles out softer; the cape flares with it, and
+# the notation emitter runs at full ratio for the dash — the world-space emitter turns
+# that into a glyph streak along the path (the cloak shredding under the burst).
+const DASH_LEAN := 0.42       # rad forward pitch at full lean (~24°)
+const DASH_LEAN_IN := 16.0    # lean arrival rate (1/s) — reaches full in ~0.06s
+const DASH_LEAN_OUT := 7.0    # settle-back rate (1/s)
+const DASH_CAPE_FLARE := 0.30
+# Subtle forward commitment while striding: the body pitches a few degrees into the walk
+# (same axis as the dash lean; they compose). Standing bolt upright while the legs cycled
+# read as a statue sliding on rails.
+const WALK_LEAN := 0.07
 # Death/summon form arc. FORM_RATE traverses 0<->1 in ~2.2s so the collapse/assemble
 # completes just under the 2.5s Dying/Summoning timers (no pop when the timer fires).
 const FORM_RATE := 0.45
@@ -693,8 +711,12 @@ const HOLLOW_COHERENCE_GAIN := 0.30   # Hollow radius x(1 .. 1.30) from whole ->
 
 ## A melee swing landed a CORRECT hit — freeze the swing briefly so the impact reads as force
 ## (consumed in _animate). Presentation-only; wired from warrior.gd's `melee_hit` in setup().
+## Gated to the strike pose (active/recovery): a hit that arrives after the state moved on
+## (the arc's fade frames landing as the NEXT swing winds up) must not freeze the wrong pose.
 func _on_melee_hit() -> void:
-	_hitstop = HITSTOP_DURATION
+	var s: String = _warrior.vfx_state()
+	if s == "ATTACK_ACTIVE" or s == "ATTACK_RECOVERY":
+		_hitstop = HITSTOP_DURATION
 
 
 func _animate(delta: float) -> void:
@@ -734,7 +756,12 @@ func _animate(delta: float) -> void:
 			atk_target = 1.0
 			rate = STRIKE_RATE
 		"ATTACK_RECOVERY":
-			atk_target = 0.35
+			# Hold the follow-through: settle only slightly back from the landing (1.0),
+			# instead of the old pull-back to 0.35. This is what de-jerks the combo — a
+			# chained press zeroes _atk, and the new swing's w=0 pose IS the previous
+			# landing, so holding near 1.0 makes the handoff seam-free (the old pull-back
+			# made every chained press visibly snap the blade back to the landing first).
+			atk_target = 0.85
 			rate = RECOVER_RATE
 	# Restart the swing param when the combo step advances, so each new swing begins clean
 	# from its windup pose (snapping the prior arc to completion) rather than popping at a
@@ -764,8 +791,16 @@ func _animate(delta: float) -> void:
 	# Hurt: a snappy backward jolt (applied as a position recoil in _sync_position).
 	_recoil = move_toward(_recoil, 1.0 if s == "HURT" else 0.0, delta * 16.0)
 
-	# Cape trails when moving and flares on the strike lunge.
-	_mesh.set_cape(0.06 + _walk_amt * 0.30 + maxf(_atk, 0.0) * 0.22)
+	# Dash: pitch the body into the burst (fast in, soft out). This owns the mesh's
+	# rotation.x; the yaw in _sync_facing owns rotation.y — they compose (YXZ order,
+	# so the pitch is about the post-yaw local X, always along the dash heading).
+	var dashing := s == "DASH"
+	_dash_lean = move_toward(_dash_lean, 1.0 if dashing else 0.0,
+			delta * (DASH_LEAN_IN if dashing else DASH_LEAN_OUT))
+	_mesh.rotation.x = DASH_LEAN * _dash_lean + WALK_LEAN * _walk_amt
+
+	# Cape trails when moving and flares on the strike lunge and the dash burst.
+	_mesh.set_cape(0.06 + _walk_amt * 0.30 + maxf(_atk, 0.0) * 0.22 + _dash_lean * DASH_CAPE_FLARE)
 	# Coherence tatter (per-frame so a mid-run tier change re-poses the cape, not just
 	# at summon) — composes with the sway above (that rotates the parent pivot).
 	_mesh.set_coherence(_coherence_raw())
@@ -798,6 +833,11 @@ func _update_notation_emission(s: String) -> void:
 		var dispersing := _form_eased > NOTATION_DISPERSE_UNTIL
 		_notation.amount_ratio = 1.0
 		_notation.emitting = dispersing
+	elif s == "DASH":
+		# Full-cloud shed for the dash: world-space particles stay where they were
+		# emitted, so this reads as a glyph streak carved along the dash path.
+		_notation.amount_ratio = 1.0
+		_notation.emitting = true
 	else:
 		# Density rises with rawness (low coherence = more shredded score).
 		_notation.amount_ratio = NOTATION_RATIO_BY_TIER[_coherence_tier()]
@@ -809,7 +849,10 @@ func _update_notation_emission(s: String) -> void:
 # — the fencer's profile the stance asks for. Faded out as he moves or strikes so he squares
 # up to his facing to act; the Hollow gate still keys off `_face_dir`, not this visual yaw.
 const STANCE_YAW := 0.5
-const TURN_RATE := 30.0   # how fast (rad-ease/s) the body pivots to face the aim on an attack
+# How fast (rad-ease/s) the body pivots to face the aim on an attack: ~90% of the turn
+# in 0.15s — the whole windup reads as the body coiling onto the cursor. The old 30
+# converged in ~2 frames and read as a facing snap, not a turn.
+const TURN_RATE := 14.0
 
 # The mesh faces its WORLD-absolute movement heading (true 3D) — EXCEPT while attacking,
 # when it turns to the mouse-driven aim so the body, and the swing arc that sweeps across

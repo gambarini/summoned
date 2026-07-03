@@ -34,9 +34,29 @@ const SWING_YAW := 2.0       # horizontal slash sweep amplitude (rad) for the co
 # torso pivot coils on the windup (t<0) and whips through on the strike (t>0); legs brace.
 const TORSO_TWIST := 0.75    # rad (~43°) hip->shoulder rotation through a slash (wide whip)
 const TORSO_LEAN := 0.28     # rad (~16°) forward torso commit on the strike
+const WAIST_Y := 1.15        # where the lean folds — the belt line (see set_attack's pivot re-seat)
 const STANCE := 1.5          # fore/aft leg brace as a fraction of LEG_SWING (deep lunge)
 const STANCE_WIDEN := 0.42   # rad (~24°) lateral foot splay — a wide planted power stance
 const BODY_SINK := 0.16      # how far the body drops into the cut (local units)
+
+# Grounding (procedural, IK-ish). Rotating the hips fore/aft swings the feet on an arc, so
+# a split stance used to leave BOTH soles floating above the plateau (worst in the thrust
+# lunge: ~0.3 units of air). Every frame _finalize_feet() measures how far the SUPPORT leg
+# (the least-lifted one) has risen and lowers the whole figure by that much (pose_drop,
+# subtracted from the root height by WarriorSync) — the planted sole returns to the ground
+# while the swing/rear foot keeps its clearance. Ankles counter-rotate so planted feet sit
+# flat; a leg trailing behind rolls onto the ball of the foot instead (toe-down heel-off —
+# the push-off / lunge-drive read). During walk this doubles as the step rhythm for free:
+# the body dips as the legs split and rises as they pass — true double-support bounce.
+const THIGH_LEN := 0.52
+const SHIN_LEN := 0.52          # knee pivot to sole (shin + foot)
+const PLANT_COMP := 0.8         # fraction of the support-leg lift the body drop compensates
+const MAX_POSE_DROP := 0.4
+const LUNGE_KNEE_FRONT := 0.8   # front knee bend per rad of stance split — the lunging leg loads
+const LUNGE_KNEE_REAR := 0.25   # rear knee stays near-straight — the drive leg
+const TOE_OFF := 0.35           # trailing-leg toe-down per rad of hip-back angle (heel-off)
+const REAR_BLEND := 0.2         # rad of hip-back over which the ankle blends flat -> ball-of-foot
+const WALK_TWIST := 0.12        # shoulder counter-rotation against the hips at full walk
 
 # Per-step strike END waypoints — the pose the blade/body LANDS in at the peak (w=1) of
 # each swing. Each swing sweeps from the PREVIOUS step's landing (step 0 from the guard,
@@ -51,9 +71,12 @@ const STRIKE_ENDS := [
 	[-1.6, -1.9, 0.0, -0.78,  0.26, BODY_SINK,       -1.0, STANCE_WIDEN,       0.0],  # 0 horizontal slash (lands left)
 	[-2.9, -0.4, 0.0,  0.20, -0.06, -0.05,            0.4, STANCE_WIDEN * 0.6, 0.0],  # 1 rises to overhead
 	[ 0.20, 0.0, 0.0,  0.0,   TORSO_LEAN * 1.5, BODY_SINK * 1.5, -0.8, STANCE_WIDEN, 0.0],  # 2 overhead chop down
-	# 3 — lunging THRUST: blade levelled forward (pitch ~ -1.5 swings the hanging blade to +Z),
-	# hips square (no twist — drive straight in), deep forward lean + lunge, the point extends out.
-	[-1.5,  0.0, 0.0,  0.0,   TORSO_LEAN * 1.6, BODY_SINK,        1.2, STANCE_WIDEN * 0.5, THRUST_EXTEND],  # 3 thrust finisher
+	# 3 — lunging THRUST: hips square (no twist — drive straight in), deep forward lean +
+	# lunge, the point extends out. The arm pitch levels the blade in WORLD space: -PI/2
+	# alone levels it in the arm's local frame, but the arm rides the leaning torso, so
+	# without subtracting the lean the point stabbed ~27° into the ground — the extra
+	# -TORSO_LEAN*1.6 cancels the tip-down and the thrust drives straight at the target.
+	[-PI / 2 - TORSO_LEAN * 1.6,  0.0, 0.0,  0.0,   TORSO_LEAN * 1.6, BODY_SINK,        1.2, STANCE_WIDEN * 0.5, THRUST_EXTEND],  # 3 thrust finisher
 ]
 
 # Combat-ready idle guard — the t=0 endpoint of set_attack(). Instead of standing limp
@@ -103,6 +126,8 @@ var _leg_l: Node3D
 var _leg_r: Node3D
 var _knee_l: Node3D    # knee pivot (child of the _leg_l hip) — bends for the crouch + walk flex
 var _knee_r: Node3D
+var _ankle_l: Node3D   # ankle pivot (child of the knee) — keeps planted soles flat / rolls to the ball
+var _ankle_r: Node3D
 var _torso: Node3D     # upper-body pivot — the whole torso twists/leans into a strike
 var _arm: Node3D       # sword shoulder pivot (child of _torso)
 var _arm_base_pos: Vector3  # _arm's rest position — the thrust drives the grip forward from here
@@ -113,6 +138,8 @@ var _cape: Node3D
 var _cape_l: MeshInstance3D
 var _cape_r: MeshInstance3D
 var _last_walk_amt: float = 0.0   # cached from set_walk() so set_attack() can relax the idle stance while moving
+var _last_walk_phase: float = 0.0 # cached walk phase — drives the shoulder counter-sway in set_attack()
+var _pose_drop := 0.0             # support-leg grounding drop (read by WarriorSync via pose_drop())
 
 
 ## Build the body under this node, using `rig` for cel materials. `hem_tint` is the
@@ -132,12 +159,14 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_box(Vector3(0.22, 0.52, 0.26), Vector3(0.0, -0.26, 0.0), lit, 0.0, 0.0, _leg_l)     # thigh
 	_knee_l = _pivot(Vector3(0.0, -0.52, 0.0), _leg_l)                                   # knee
 	_box(Vector3(0.20, 0.46, 0.22), Vector3(0.0, -0.23, 0.0), lit, 0.0, 0.0, _knee_l)    # shin
-	_box(Vector3(0.24, 0.12, 0.34), Vector3(0.0, -0.46, 0.06), armor, 0.0, 0.0, _knee_l) # foot
+	_ankle_l = _pivot(Vector3(0.0, -0.46, 0.0), _knee_l)                                 # ankle
+	_box(Vector3(0.24, 0.12, 0.34), Vector3(0.0, 0.0, 0.06), armor, 0.0, 0.0, _ankle_l)  # foot
 	_leg_r = _pivot(Vector3(0.17, 0.95, 0.04))
 	_box(Vector3(0.22, 0.52, 0.26), Vector3(0.0, -0.26, 0.0), lit, 0.0, 0.0, _leg_r)
 	_knee_r = _pivot(Vector3(0.0, -0.52, 0.0), _leg_r)
 	_box(Vector3(0.20, 0.46, 0.22), Vector3(0.0, -0.23, 0.0), lit, 0.0, 0.0, _knee_r)
-	_box(Vector3(0.24, 0.12, 0.34), Vector3(0.0, -0.46, 0.06), armor, 0.0, 0.0, _knee_r)
+	_ankle_r = _pivot(Vector3(0.0, -0.46, 0.0), _knee_r)                                 # ankle
+	_box(Vector3(0.24, 0.12, 0.34), Vector3(0.0, 0.0, 0.06), armor, 0.0, 0.0, _ankle_r)  # foot
 
 	# Surcoat skirt (shorter, raised so the legs read) + burning hem band at its new base.
 	_cyl(0.26, 0.50, 0.85, Vector3(0.0, 1.28, 0.0), coat)
@@ -202,6 +231,7 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 ## Walk cycle: opposite-phase leg swings, scaled by `amount` (0 idle .. 1 moving).
 func set_walk(phase: float, amount: float) -> void:
 	_last_walk_amt = amount
+	_last_walk_phase = phase
 	var s := sin(phase) * LEG_SWING * amount
 	if _leg_l: _leg_l.rotation.x = s
 	if _leg_r: _leg_r.rotation.x = -s
@@ -237,20 +267,45 @@ func set_attack(t: float, step := 0) -> void:
 	_arm.rotation.y = lerpf(a[1], b[1], we)
 	_arm.rotation.z = lerpf(a[2], b[2], we)
 	_torso.rotation.y = lerpf(a[3], b[3], we)
+	# Walking counter-rotation: the shoulders swing against the hips (left leg forward ->
+	# right shoulder forward), fading out as a strike takes ownership of the torso. This is
+	# the upper-body life a real gait has — without it the torso rode the legs like a crate.
+	_torso.rotation.y += -sin(_last_walk_phase) * WALK_TWIST * _last_walk_amt * (1.0 - w)
 	_torso.rotation.x = lerpf(a[4], b[4], we)
-	_torso.position.y = lerpf(-a[5], -b[5], we)   # positive sink = body drops into the cut
+	# Re-seat the lean's hinge at the WAIST. The pivot node stays at the origin (so the
+	# Y-twist keeps its pivot-height independence), but rotating there makes a forward
+	# lean fold at the FEET — at the chop/thrust finishers' deep leans the chest sheared
+	# ~0.9 units forward off the planted hips and the back read as snapped. Offsetting by
+	# h - R*h (h = belt point) moves the effective hinge to belt height: the hips stay
+	# seated on the legs and only the upper body folds forward. positive sink still
+	# drops the body into the cut on top.
+	var waist := Vector3(0.0, WAIST_Y, 0.0)
+	var pivot_fix := waist - _torso.basis * waist
+	_torso.position = pivot_fix + Vector3(0.0, lerpf(-a[5], -b[5], we), 0.0)
 	# Thrust extension: drive the sword grip forward along body-forward (local +Z). 0 for the
 	# cuts, so this is the rest position otherwise; only the finisher thrust drives it out.
 	_arm.position = _arm_base_pos + Vector3(0.0, 0.0, lerpf(a[8], b[8], we))
 	# Legs: the guard plants a persistent splay (relaxed while walking); the fore/aft lunge
 	# is strike-only. Both fold into the single _apply_stance call, sweeping with the swing.
-	_apply_stance(lerpf(a[6], b[6], we), lerpf(a[7], b[7], we))
+	var stance_val := lerpf(a[6], b[6], we)
+	_apply_stance(stance_val, lerpf(a[7], b[7], we))
+	# Load the legs into the split (scaled by the strike weight, so the authored idle-guard
+	# knees own the rest pose): the leading knee bends over its planted foot, the rear leg
+	# stays near-straight as the drive leg — a true lunge instead of two stiff stilts.
+	var lunge := absf(stance_val) * LEG_SWING * STANCE * w
+	if stance_val > 0.0:   # right leg leads (positive stance drives the left hip back)
+		if _knee_r: _knee_r.rotation.x += lunge * LUNGE_KNEE_FRONT
+		if _knee_l: _knee_l.rotation.x += lunge * LUNGE_KNEE_REAR
+	elif stance_val < 0.0:
+		if _knee_l: _knee_l.rotation.x += lunge * LUNGE_KNEE_FRONT
+		if _knee_r: _knee_r.rotation.x += lunge * LUNGE_KNEE_REAR
 	# Knees bend into the crouch at idle (lead knee deeper); straighten as he moves or strikes.
 	# Added on top of the walk flex set_walk() wrote this frame. WarriorSync drops the hips by
 	# CROUCH_DROP to keep the soles planted, so this reads as a sink, not floating feet.
 	var crouch := leg_idle * (1.0 - w)
 	if _knee_l: _knee_l.rotation.x += IDLE_KNEE_LEAD * crouch
 	if _knee_r: _knee_r.rotation.x += IDLE_KNEE_REAR * crouch
+	_finalize_feet()
 
 
 # One end of a swing as a flat pose array (field order matches STRIKE_ENDS). `step` -1 (or
@@ -288,7 +343,7 @@ func begin_guard_return() -> void:
 		return
 	_relax_from = {
 		"arm_rot": _arm.rotation, "arm_pos": _arm.position,
-		"torso_rot": _torso.rotation, "torso_y": _torso.position.y,
+		"torso_rot": _torso.rotation, "torso_pos": _torso.position,
 		"leg_l": _leg_l.rotation, "leg_r": _leg_r.rotation,
 		"knee_l": _knee_l.rotation.x, "knee_r": _knee_r.rotation.x,
 	}
@@ -307,11 +362,14 @@ func set_guard_return(r: float) -> void:
 	_arm.rotation = _arm.rotation.lerp(_relax_from["arm_rot"], k)
 	_arm.position = _arm.position.lerp(_relax_from["arm_pos"], k)
 	_torso.rotation = _torso.rotation.lerp(_relax_from["torso_rot"], k)
-	_torso.position.y = lerpf(_torso.position.y, _relax_from["torso_y"], k)
+	_torso.position = _torso.position.lerp(_relax_from["torso_pos"], k)
 	_leg_l.rotation = _leg_l.rotation.lerp(_relax_from["leg_l"], k)
 	_leg_r.rotation = _leg_r.rotation.lerp(_relax_from["leg_r"], k)
 	_knee_l.rotation.x = lerpf(_knee_l.rotation.x, _relax_from["knee_l"], k)
 	_knee_r.rotation.x = lerpf(_knee_r.rotation.x, _relax_from["knee_r"], k)
+	# Re-derive the ankles + grounding drop from the blended pose (they are pure functions
+	# of the live hip/knee rotations, so the settle stays planted frame by frame).
+	_finalize_feet()
 
 # Pose the legs: a signed fore/aft lunge (added on top of the walk pose set_walk() wrote
 # this frame, so it composes without fighting it) plus an explicit lateral splay. The splay
@@ -322,6 +380,44 @@ func _apply_stance(stance: float, widen: float) -> void:
 	if _leg_r: _leg_r.rotation.x -= LEG_SWING * STANCE * stance
 	if _leg_l: _leg_l.rotation.z = -widen
 	if _leg_r: _leg_r.rotation.z = widen
+
+
+# Grounding pass — runs after every pose write (set_attack / set_guard_return), reading the
+# FINAL hip/knee rotations of the frame. Measures each leg's sole lift, lowers the figure by
+# the support (least-lifted) leg's lift so its sole stays planted on the plateau, and poses
+# the ankles: planted/forward feet counter-rotate to sit flat, a leg trailing behind rolls
+# onto the ball of the foot (toe-down heel-off). Splayed legs counter-roll so soles never
+# tilt sideways with the stance widen.
+func _finalize_feet() -> void:
+	if _ankle_l == null or _ankle_r == null:
+		return
+	var lift_l := _leg_lift(_leg_l.rotation.x, _knee_l.rotation.x)
+	var lift_r := _leg_lift(_leg_r.rotation.x, _knee_r.rotation.x)
+	_pose_drop = clampf(minf(lift_l, lift_r) * PLANT_COMP, 0.0, MAX_POSE_DROP)
+	_pose_ankle(_ankle_l, _leg_l, _knee_l)
+	_pose_ankle(_ankle_r, _leg_r, _knee_r)
+
+
+# How far a leg's sole has risen off the ground for these hip/knee bends (straight-line
+# segment model: thigh to the knee pivot, shin+foot to the sole).
+func _leg_lift(hip: float, knee: float) -> float:
+	return THIGH_LEN * (1.0 - cos(hip)) + SHIN_LEN * (1.0 - cos(hip + knee))
+
+
+func _pose_ankle(ankle: Node3D, leg: Node3D, knee: Node3D) -> void:
+	var hip := leg.rotation.x
+	var flat := -(hip + knee.rotation.x)   # cancel hip+knee -> sole parallel to the ground
+	var ball := hip * TOE_OFF              # trailing leg: toe down, heel driven up
+	ankle.rotation.x = lerpf(flat, ball, clampf(hip / REAR_BLEND, 0.0, 1.0))
+	ankle.rotation.z = -leg.rotation.z     # counter the stance splay — soles stay level
+
+
+## Vertical grounding drop (local units) for the current pose — how far WarriorSync should
+## lower the root so the support foot stays planted. Replaces the old fixed CROUCH_DROP:
+## it now covers the idle crouch, the walk split (a true per-step bounce), and the strike
+## lunges, all from the same support-leg measurement.
+func pose_drop() -> float:
+	return _pose_drop
 
 ## The blade-tip socket (built in build()) — WarriorSync anchors the slash arc to it.
 func get_sword_tip() -> Node3D:

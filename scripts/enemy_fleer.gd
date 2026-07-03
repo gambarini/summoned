@@ -10,6 +10,8 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	_tick_status_timers(delta)
+	if _tick_hit_reaction(delta):
+		return
 	if _state == State.CHASE and _player:
 		var spd := FLEE_SPEED * 1.5 if _amplified else FLEE_SPEED
 		var dir := (global_position - _player.global_position).normalized()

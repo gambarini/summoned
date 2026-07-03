@@ -5,14 +5,41 @@ const ACCEL := 10.0   # lerp factor toward target speed — higher = snappier st
 const DECEL := 14.0   # lerp factor toward zero — slightly faster stop than start
 const RUN_MULTIPLIER := 1.8   # Left Shift held — sprint speed scale over walk SPEED
 # Dash: a brief i-frame dodge. Flat burst (no lerp) along the dash direction, with
-# invulnerability while State.DASH and a cooldown before the next one.
-const DASH_SPEED := 320.0
-const DASH_DURATION := 0.18
+# invulnerability while State.DASH and a cooldown before the next one. Sized for the
+# explore-scale arenas (PLAY_SCALE=4): ~123px per dash — a real reposition, not a blip.
+# After DASH_ATTACK_CANCEL_AFTER of commit, a buffered attack may cancel the dash
+# directly (_try_attack) — the dash momentum carries into the swing's damped drift,
+# so dash-attack is a genuine lunge rather than dash, stop, swing.
+const DASH_SPEED := 560.0
+const DASH_DURATION := 0.22
 const DASH_COOLDOWN := 0.7
+const DASH_ATTACK_CANCEL_AFTER := 0.10
+# Input buffer: attack/dash presses arm a short window instead of being dropped when
+# they land mid-swing, mid-dash, or during the attack cooldown. _tick_buffers fires
+# the queued action at the first legal physics frame, so mashing keeps its rhythm.
+const INPUT_BUFFER := 0.15
 # Stylish swing cycle — each attack press advances the step; a continuous 4-beat
 # flourish whose blade sweeps across the body (left->right, right->top, top->down,
 # back-left). Purely a presentation variety counter, distinct from the gameplay `chain`.
 const COMBO_LEN := 4
+# Attack movement: swings no longer hard-root (startup) then full-speed slide
+# (active/recovery) — that stop-go read as stutter when attacking on the move.
+# Every attack state damps toward a slow steerable drift instead, and the strike
+# itself fires a forward step along the aim as REAL sim velocity — so the hitbox,
+# the mesh, and move_and_slide's wall collision all travel together (replacing
+# the old visual-only LUNGE_PX offset in warrior_sync.gd).
+const ATTACK_DRIFT := 0.4         # fraction of walk SPEED still steerable mid-swing
+const ATTACK_DRIFT_DAMP := 9.0    # lerp factor toward the drift target
+const ATTACK_STEP_SPEED := 130.0  # forward-step impulse at strike start (px/s, damps out)
+const ATTACK_STEP_FINISHER := 1.6 # the thrust finisher drives further
+# Swing cadence — authored here (not in warrior.tscn's Timer nodes) so the whole feel
+# lives beside the other attack constants. ~2.6 swings/s when chaining (the cooldown is
+# the rhythm gate): a readable windup beat, a strike window the eye can catch, and a
+# recovery that holds the follow-through pose. The old 0.117/0.083/0.25 read as a blur.
+const ATTACK_STARTUP_TIME := 0.16   # windup — also the aim-tracking window (see _physics_process)
+const ATTACK_ACTIVE_TIME := 0.11    # strike/hitbox window (finisher x1.5)
+const ATTACK_RECOVERY_TIME := 0.30  # chain window (finisher x2)
+const ATTACK_COOLDOWN_TIME := 0.38  # min time between swing starts — the combo's beat
 
 # Vertical hover bob + horizontal sway — driven here in GDScript (not the shader)
 # so the Hollow nodes ride the same offset and stay welded to the chest. Phase is
@@ -111,6 +138,8 @@ var _attack_dir: Vector2 = Vector2.RIGHT
 var _dash_dir: Vector2 = Vector2.RIGHT
 var _dash_time_left := 0.0
 var _dash_cd_left := 0.0
+var _attack_buffer := 0.0
+var _dash_buffer := 0.0
 var _combo_step := 0
 # Authored attack timings, captured once in _ready. Timer.start(x) OVERWRITES wait_time,
 # so the per-step finisher scaling must compute from these saved bases, never from the
@@ -118,6 +147,10 @@ var _combo_step := 0
 var _active_base := 0.0
 var _recovery_base := 0.0
 var _was_extracted: bool = false
+## Extraction gate permission (F3): the run scene sets this true only while the
+## warrior stands inside the ring's active extraction gate. Until then the `extract`
+## action is inert — progression is a place you *reach*, not a key pressed anywhere.
+var can_extract: bool = false
 var _facing_dir: String = "s"
 var _idle_pulse: Tween
 
@@ -215,12 +248,24 @@ func _ready() -> void:
 	$DyingTimer.timeout.connect(func(): warrior_died.emit())
 	$SummoningTimer.timeout.connect(func(): _change_state(State.IDLE))
 	$ResonanceCooldown.timeout.connect(func(): resonance_ready.emit(true))
+	# Cadence is script-owned: override the scene-authored wait_times so the swing
+	# rhythm tunes in one place (the ATTACK_*_TIME block), then capture the bases.
+	$StartupTimer.wait_time = ATTACK_STARTUP_TIME
+	$ActiveTimer.wait_time = ATTACK_ACTIVE_TIME
+	$RecoveryTimer.wait_time = ATTACK_RECOVERY_TIME
+	$AttackCooldown.wait_time = ATTACK_COOLDOWN_TIME
 	_active_base = $ActiveTimer.wait_time
 	_recovery_base = $RecoveryTimer.wait_time
 	_change_state(State.SUMMONING)
 
 func _physics_process(delta: float) -> void:
 	_tick_dash(delta)
+	_tick_buffers(delta)
+	# The windup steers: keep re-sampling the cursor through ATTACK_STARTUP so the
+	# swing follows the mouse until the strike fires (ATTACK_ACTIVE locks the aim —
+	# the step impulse, the arc, and the mesh yaw all commit to the last sample).
+	if _state == State.ATTACK_STARTUP:
+		_sample_attack_dir()
 	_handle_movement(delta)
 	_update_move_state()
 	# Keep 8dir texture in sync with facing during idle/move
@@ -230,22 +275,22 @@ func _physics_process(delta: float) -> void:
 	_refresh_hollow_facing()
 
 func _unhandled_input(event: InputEvent) -> void:
-	match _state:
-		State.DYING, State.SUMMONING, State.HURT, State.ATTACK_STARTUP, State.ATTACK_ACTIVE, State.DASH:
-			return
-		_:
-			pass
-	# Dash — raw-key bound (Space), like the Song's KEY_G, to avoid editing the locked
-	# project.godot. A quick i-frame dodge; can cancel an attack's recovery.
+	if _state in [State.DYING, State.SUMMONING]:
+		return
+	# Attack and dash are buffered, never dropped: the press arms INPUT_BUFFER and
+	# _tick_buffers consumes it at the first legal frame (so a press during a swing,
+	# the attack cooldown, hurt, or a dash still comes out). Dash stays raw-key bound
+	# (Space), like the Song's KEY_G, to avoid editing the locked project.godot.
 	if event is InputEventKey and event.pressed and not event.echo \
-			and event.physical_keycode == KEY_SPACE \
-			and _state in [State.IDLE, State.MOVE, State.ATTACK_RECOVERY, State.ECHO_ACTIVE] \
-			and _dash_cd_left <= 0.0:
-		_start_dash()
+			and event.physical_keycode == KEY_SPACE:
+		_dash_buffer = INPUT_BUFFER
 		return
 	if event.is_action_pressed("attack"):
-		_try_attack()
-	elif event.is_action_pressed("resonance") and $ResonanceCooldown.is_stopped():
+		_attack_buffer = INPUT_BUFFER
+		return
+	if _state in [State.HURT, State.ATTACK_STARTUP, State.ATTACK_ACTIVE, State.DASH]:
+		return
+	if event.is_action_pressed("resonance") and $ResonanceCooldown.is_stopped():
 		_do_resonance()
 	elif event.is_action_pressed("extract"):
 		_do_extract()
@@ -263,8 +308,11 @@ func _handle_movement(delta: float) -> void:
 	if dir.length() > 0.1 and _state in [State.IDLE, State.MOVE, State.ECHO_ACTIVE]:
 		_facing_dir = _vector_to_dir(dir)
 	match _state:
-		State.DYING, State.SUMMONING, State.HURT, State.ATTACK_STARTUP:
+		State.DYING, State.SUMMONING, State.HURT:
 			velocity = Vector2.ZERO
+		State.ATTACK_STARTUP, State.ATTACK_ACTIVE, State.ATTACK_RECOVERY:
+			var drift: Vector2 = dir * (SPEED * ATTACK_DRIFT)
+			velocity = velocity.lerp(drift, ATTACK_DRIFT_DAMP * delta)
 		State.ECHO_ACTIVE:
 			var target := dir * (SPEED * 0.4)
 			velocity = velocity.lerp(target, ACCEL * delta)
@@ -346,6 +394,23 @@ func _start_dash() -> void:
 	_dash_cd_left = DASH_COOLDOWN
 	_change_state(State.DASH)
 
+# Consume buffered attack/dash presses at the first legal physics frame. Dash wins
+# ties (the defensive verb, and it can cancel recovery); an attack buffered during a
+# dash cancels it once the commit window has passed (_try_attack's DASH branch), or
+# fires the moment the dash ends — either way dash-attack falls out for free.
+func _tick_buffers(delta: float) -> void:
+	if _dash_buffer > 0.0:
+		_dash_buffer -= delta
+		if _state in [State.IDLE, State.MOVE, State.ATTACK_RECOVERY, State.ECHO_ACTIVE] \
+				and _dash_cd_left <= 0.0:
+			_dash_buffer = 0.0
+			_start_dash()
+			return
+	if _attack_buffer > 0.0:
+		_attack_buffer -= delta
+		if _try_attack():
+			_attack_buffer = 0.0
+
 # Tick the dash duration + cooldown each physics frame (no scene Timer nodes, so the
 # whole feature stays in this script). Dash ends back in IDLE; the move-state check
 # resumes from there next frame.
@@ -410,17 +475,16 @@ func _enter_state(new: State) -> void:
 			_show_anim()
 			_stop_idle_pulse()
 			$AttackCooldown.start()
-			if attack_dir_provider.is_valid():
-				_attack_dir = attack_dir_provider.call()
-			else:
-				_attack_dir = (get_global_mouse_position() - global_position).normalized()
-			if _attack_dir == Vector2.ZERO:
-				_attack_dir = Vector2.RIGHT
-			_facing_dir = _vector_to_dir(_attack_dir)
+			_sample_attack_dir()
 			_play_dir("startup")
 			$StartupTimer.start()
 		State.ATTACK_ACTIVE:
 			_show_anim()
+			# The strike steps forward as real sim velocity (not a visual offset):
+			# the damped-drift branch in _handle_movement bleeds it out over the
+			# swing, and move_and_slide keeps the step honest against walls.
+			velocity = _attack_dir * (ATTACK_STEP_SPEED \
+					* (ATTACK_STEP_FINISHER if _combo_step == 3 else 1.0))
 			_spawn_attack_arc()
 			_play_dir("active")
 			# The finisher (step 3, the back-left strike) lands heavier — a longer active window.
@@ -430,7 +494,9 @@ func _enter_state(new: State) -> void:
 			_show_anim()
 			_play_dir("recovery")
 			_start_idle_pulse()
-			$RecoveryTimer.start(_recovery_base * (1.5 if _combo_step == 3 else 1.0))
+			# Finisher recovery stays heavy (0.6s) over the quickened 0.3s base — the
+			# fast steps 0-2 chain at ~0.25s/swing, the thrust still lands with weight.
+			$RecoveryTimer.start(_recovery_base * (2.0 if _combo_step == 3 else 1.0))
 		State.ECHO_ACTIVE:
 			_show_anim()
 			_stop_idle_pulse()
@@ -807,18 +873,43 @@ func _set_hollow_stress(value: int) -> void:
 
 # ── Combat ───────────────────────────────────────────────────────────────────
 
-func _try_attack() -> void:
+# Read the live cursor aim (provider in 3D, raw mouse in 2D) into _attack_dir and the
+# sim facing. Called on ATTACK_STARTUP entry and every physics frame of the windup, so
+# the swing tracks the mouse until the strike commits. A degenerate read keeps the
+# previous direction (never zero — _attack_dir initialises to RIGHT).
+func _sample_attack_dir() -> void:
+	var dir: Vector2
+	if attack_dir_provider.is_valid():
+		dir = attack_dir_provider.call()
+	else:
+		dir = get_global_mouse_position() - global_position
+	if dir.length() > 0.01:
+		_attack_dir = dir.normalized()
+		_facing_dir = _vector_to_dir(_attack_dir)
+
+func _try_attack() -> bool:
 	if not $AttackCooldown.is_stopped():
-		return
+		return false
 	# Combo: a fresh attack starts the cycle at the first swing; chaining out of
 	# recovery advances to the next stylish swing (left->right -> right->top ->
 	# top->down -> back-left), looping back to the first.
 	if _state in [State.IDLE, State.MOVE, State.ECHO_ACTIVE]:
 		_combo_step = 0
 		_change_state(State.ATTACK_STARTUP)
+		return true
 	elif _state == State.ATTACK_RECOVERY:
 		_combo_step = (_combo_step + 1) % COMBO_LEN
 		_change_state(State.ATTACK_STARTUP)
+		return true
+	elif _state == State.DASH \
+			and DASH_DURATION - _dash_time_left >= DASH_ATTACK_CANCEL_AFTER:
+		# Dash-cancel: the dash has committed (i-frame blip still reads), so an attack
+		# may cut the rest short. The 560px/s dash velocity feeds straight into the
+		# attack states' damped drift — a lunging strike, wall-honest via move_and_slide.
+		_combo_step = 0
+		_change_state(State.ATTACK_STARTUP)
+		return true
+	return false
 
 func _spawn_attack_arc() -> void:
 	var arc := AttackArcScene.instantiate()
@@ -829,16 +920,17 @@ func _spawn_attack_arc() -> void:
 		arc.set_meta("skip_world_mirror", true)
 	get_parent().add_child(arc)
 	arc.global_position = global_position
-	arc.set_direction(_attack_dir)
+	arc.set_direction(_attack_dir, _combo_step)
 	arc.hit_target.connect(_on_hit)
 	# Harmonic Burst fires on the back-left finisher (step 3) or a maxed landed-hit chain.
 	if _combo_step == 3 or chain == 4:
 		_do_burst()
 
 func _on_hit(area: Area2D) -> void:
-	# The arc itself owns the hit window: it lives for its full sweep and
-	# dedupes per-enemy, so accept hits for the entire travel (not just the
-	# brief ATTACK_ACTIVE frame). Only reject while the warrior is gone.
+	# The arc owns the hit window (≈ ATTACK_ACTIVE + a hair of early recovery —
+	# its HitArea stops monitoring after that, and it dedupes per-enemy), so
+	# anything arriving here is a genuine strike-window hit. Only reject while
+	# the warrior is gone.
 	if _inactive:
 		return
 	var parent = area.get_parent()
@@ -964,6 +1056,8 @@ func _emit_song_vfx(color: Color) -> void:
 func _do_extract() -> void:
 	if _state in [State.DYING, State.SUMMONING]:
 		return
+	if not can_extract:
+		return  # F3: extraction only fires inside the ring's gate (main sets can_extract)
 	_was_extracted = true
 	set_physics_process(false)
 	var tween := create_tween()

@@ -7,6 +7,11 @@ enum HitResult { CORRECT, WRONG }
 enum State { IDLE, CHASE, ATTACK, DEAD }
 
 const SPEED := 40.0
+# Hit reaction: a CORRECT hit staggers the enemy (no chase/attack) and shoves it away
+# from the player, so the warrior's combo visibly interrupts instead of trading hits.
+const HITSTUN_DURATION := 0.22
+const KNOCKBACK_SPEED := 140.0
+const KNOCKBACK_DECAY := 8.0
 const NEUTRAL_COLOR := Color(0.533, 0.596, 0.659, 1)
 const COLORS := {
 	0: Color(0.769, 0.329, 0.478, 1),
@@ -24,6 +29,8 @@ var _amp_timer := 0.0
 var _force_amplified := false
 var _pacified := false
 var _pacify_timer := 0.0
+var _hitstun_timer := 0.0
+var _knockback := Vector2.ZERO
 
 @onready var _visual: Polygon2D = $Visual
 @onready var _attack_timer: Timer = $AttackTimer
@@ -57,8 +64,22 @@ func _tick_status_timers(delta: float) -> void:
 		if _pacify_timer <= 0.0:
 			_pacified = false
 
+# While staggered the hit reaction owns the frame: the enemy rides the decaying
+# knockback shove and cannot chase or attack. Returns true while active. Subclasses
+# that replace _physics_process (fleer) must early-out on this too.
+func _tick_hit_reaction(delta: float) -> bool:
+	if _hitstun_timer <= 0.0:
+		return false
+	_hitstun_timer -= delta
+	velocity = _knockback
+	_knockback = _knockback.lerp(Vector2.ZERO, KNOCKBACK_DECAY * delta)
+	move_and_slide()
+	return true
+
 func _physics_process(delta: float) -> void:
 	_tick_status_timers(delta)
+	if _tick_hit_reaction(delta):
+		return
 	if _state == State.CHASE and _player:
 		var spd := SPEED * 2.0 if _amplified else SPEED
 		var dir := (_player.global_position - global_position).normalized()
@@ -108,7 +129,7 @@ func _on_attack_exited(body: Node2D) -> void:
 		_state = State.CHASE
 
 func _do_attack() -> void:
-	if _player and _state == State.ATTACK:
+	if _player and _state == State.ATTACK and _hitstun_timer <= 0.0:
 		_player.take_damage(1)
 		_flash(Color(1, 0.3, 0.3, 1))
 
@@ -120,10 +141,24 @@ func receive_hit(attacker_freq: Freq) -> HitResult:
 		hp -= 1
 		if hp <= 0:
 			_die()
+		else:
+			_stagger()
 		return HitResult.CORRECT
 	else:
 		_amplify()
 		return HitResult.WRONG
+
+# Interrupt on a landed hit: brief stun, a shove away from the player (stun-only when
+# no player reference is held — e.g. hit from outside detection), and a squash-pop.
+func _stagger() -> void:
+	_hitstun_timer = HITSTUN_DURATION
+	if is_instance_valid(_player):
+		_knockback = (global_position - _player.global_position).normalized() * KNOCKBACK_SPEED
+	else:
+		_knockback = Vector2.ZERO
+	var tween := create_tween()
+	tween.tween_property(_visual, "scale", Vector2(1.25, 0.75), 0.05)
+	tween.tween_property(_visual, "scale", Vector2.ONE, 0.12)
 
 func _amplify() -> void:
 	_amplified = true
