@@ -38,6 +38,7 @@ const GROUND_SCALE := 0.4    # one scale for ALL ground/path
 # macro value-drift + scattered decals) via `GroundStyle`. Cliffs + stone ruins keep
 # their tiling textures (peripheral / coarse masonry). See docs/RENDERING_3D.md.
 var _rig: IsoRig
+var _descent_pos: Vector3  # far descent archway the extraction gate mounts on (R1c)
 
 
 ## Reconfigure the rig's environment for the Pale Reaches atmosphere pass: the
@@ -96,7 +97,7 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 7
+	rng.seed = GameState.ring_seed(7)
 	# Walkable half-extents (world units) from the shared arena knob (SimSpace.
 	# PLAY_SCALE). All terrain extents derive from this, so the ground always covers
 	# the warrior's reachable footprint at any PLAY_SCALE (was a fixed 28x22 plateau).
@@ -187,7 +188,7 @@ func _build_terrain() -> void:
 	# combat signals stay legible. Own rng (seed 13) so the baseline scatter above
 	# is byte-for-byte unchanged. ---
 	var rng2 := RandomNumberGenerator.new()
-	rng2.seed = 13
+	rng2.seed = GameState.ring_seed(13)
 	for n in range(46):
 		var gp := Vector3(rng2.randf_range(-12.0, 12.0), 0.5, rng2.randf_range(-9.5, 9.5))
 		if _is_central(gp):
@@ -215,6 +216,7 @@ func _build_terrain() -> void:
 	# haze) plus a few outlying ruins as explore landmarks. ===
 	_fill_expanse(half)
 	_add_outlying_landmarks(half)
+	_build_descent_landmark(half)
 
 
 # Central walkable band kept clear so enemy/warrior signals stay legible.
@@ -425,7 +427,7 @@ func _add_cliff(origin: Vector3) -> void:
 # sane. Own RNG (seed 21) so the hub's seed-7/13 layout is byte-for-byte unchanged.
 func _fill_expanse(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 21
+	rng.seed = GameState.ring_seed(21)
 	var area := half.x * half.y
 	for n in range(clampi(int(area * 0.12), 80, 380)):
 		var p := _expanse_point(rng, half)
@@ -470,7 +472,7 @@ func _expanse_point(rng: RandomNumberGenerator, half: Vector2) -> Vector3:
 # destinations: a dome on the horizon to walk toward. Reuses the hub's ruin makers.
 func _add_outlying_landmarks(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 29
+	rng.seed = GameState.ring_seed(29)
 	var ring_r := minf(half.x, half.y)
 	var count := 5
 	for i in range(count):
@@ -489,3 +491,28 @@ func _add_outlying_landmarks(half: Vector2) -> void:
 				stone.position = pos + Vector3(rng.randf_range(-2.5, 2.5), h * 0.5 - 0.5, rng.randf_range(-2.5, 2.5))
 				stone.rotation_degrees = Vector3(rng.randf_range(-6.0, 6.0), rng.randf_range(0.0, 90.0), rng.randf_range(-6.0, 6.0))
 				add_child(stone)
+
+
+# --- Descent landmark (R1c) --------------------------------------------------
+# Ring 1's authored extraction destination: a lone archway far out in the reach.
+# Descending means walking to a ruin visible on the horizon, not the generic bare
+# stretch of north wall. Placed well beyond the home HUB (avoidance-first, per F3)
+# and off the observatory's back-centre axis so it reads as its own landmark. An
+# OPEN arch, so the gate beacon's shaft (main.gd) rises through the gap instead of
+# clipping a solid dome. Derived from `half` so it stays in-bounds at any PLAY_SCALE.
+func _build_descent_landmark(half: Vector2) -> void:
+	_descent_pos = Vector3(half.x * 0.4, 0.5, -half.y * 0.8)
+	add_child(_make_arch(_descent_pos))
+	# Flanking standing stones frame it as a deliberate threshold, not stray ruin.
+	for dx in [-3.2, 3.2]:
+		var stone := _box(Vector3(0.9, 3.2, 0.9), COL_STONE_DARK)
+		stone.position = _descent_pos + Vector3(dx, 1.1, 0.0)
+		stone.rotation_degrees.z = -4.0 if dx < 0.0 else 4.0
+		add_child(stone)
+
+
+# Ring 1's authored extraction point (sim px), consumed by main.gd's
+# _setup_extraction_gate() in place of the generic far-edge default. Returns the
+# far descent archway built in build() (which _ready() runs before the gate setup).
+func extraction_point() -> Vector2:
+	return SimSpace.to_sim(_descent_pos)

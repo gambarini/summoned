@@ -49,9 +49,18 @@ const PIP_BORDER := 1.0      # render px; dark frame on every side
 const NEUTRAL_COLOR := Color(0.533, 0.596, 0.659, 1)
 const FREQ_DISSONANT := 0
 
+# Creatures whose presentation has graduated from the flat billboard to a
+# procedural cel-mesh (the warrior pattern — see threshold_mesh.gd). Keyed by
+# script class_name; the mesh script must expose build(rig) + sync_from(body,
+# delta). Anything not listed keeps the billboard path (the enemy/fleer/phaser
+# placeholders, until they are rebuilt as meshes too).
+const CREATURE_MESH_SCRIPTS := {
+	&"CreatureThreshold": "res://scripts/threshold_mesh.gd",
+}
+
 var _rig: IsoRig
-var _enemy_meshes := {}       # CharacterBody2D -> MeshInstance3D
-var _arc_meshes := {}         # Node2D (AttackArc) -> MeshInstance3D
+var _enemy_meshes: Dictionary = {}  # CharacterBody2D -> Node3D (billboard or creature mesh rig)
+var _arc_meshes: Dictionary = {}    # Node2D (AttackArc) -> MeshInstance3D
 var _pip_overlay: Node2D      # unsnapped dot layer in the post-viewport
 var _pip_draws: Array = []    # [{pos: Vector2, color: Color}] rebuilt each frame
 
@@ -72,15 +81,15 @@ func enemy_billboard_count() -> int:
 
 
 # Visual sync runs after physics, so it reads bodies' post-move state.
-func _process(_delta: float) -> void:
-	_sync_enemies()
+func _process(delta: float) -> void:
+	_sync_enemies(delta)
 	_sync_arcs()
 	_update_pips()
 
 
 # --- Enemies -------------------------------------------------------------
 
-func _sync_enemies() -> void:
+func _sync_enemies(delta: float) -> void:
 	# Reap billboards whose body has been freed (death -> queue_free).
 	for body in _enemy_meshes.keys():
 		if not is_instance_valid(body):
@@ -89,7 +98,7 @@ func _sync_enemies() -> void:
 
 	for body in get_tree().get_nodes_in_group(ENEMY_GROUP):
 		if not _enemy_meshes.has(body):
-			var mi := _make_enemy_billboard(body)
+			var mi := _make_enemy_visual(body)
 			if mi == null:
 				continue
 			_rig.add_world_child(mi)
@@ -98,7 +107,29 @@ func _sync_enemies() -> void:
 			# draw over the 3D display (the 2D camera is off, so it would otherwise
 			# render at raw sim coords). Physics/Area2D/combat are unaffected.
 			(body as Node2D).visible = false
-		_update_enemy_billboard(body, _enemy_meshes[body])
+		_update_enemy_visual(body, _enemy_meshes[body], delta)
+
+
+# Dispatch: creatures with a graduated cel-mesh get a 3D rig (built once, then
+# driven per-frame via sync_from); everything else keeps the camera-facing
+# billboard. Dynamic call()s keep this decoupled from the mesh scripts' types.
+func _make_enemy_visual(body: Node2D) -> Node3D:
+	var body_script: Script = body.get_script()
+	var cls: StringName = body_script.get_global_name() if body_script != null else &""
+	if CREATURE_MESH_SCRIPTS.has(cls):
+		var mesh_script: GDScript = load(CREATURE_MESH_SCRIPTS[cls])
+		var mesh: Node3D = mesh_script.new()
+		mesh.name = "CreatureMesh"
+		mesh.call("build", _rig)
+		return mesh
+	return _make_enemy_billboard(body)
+
+
+func _update_enemy_visual(body: Node2D, node: Node3D, delta: float) -> void:
+	if node.has_method("sync_from"):
+		node.call("sync_from", body, delta)
+	else:
+		_update_enemy_billboard(body, node as MeshInstance3D)
 
 
 func _make_enemy_billboard(body: Node2D) -> MeshInstance3D:

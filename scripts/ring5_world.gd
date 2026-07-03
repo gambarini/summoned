@@ -105,7 +105,7 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 55  # Ring 5's own scatter seed (1=7, 2=12, 3=31, 4=44)
+	rng.seed = GameState.ring_seed(55)  # Ring 5's own scatter seed (1=7, 2=12, 3=31, 4=44)
 	# Walkable half-extents from the shared arena knob (SimSpace.PLAY_SCALE).
 	var half := SimSpace.half_world()
 
@@ -342,7 +342,7 @@ const HUB := 13.0
 # authored seed-55 layout is byte-for-byte unchanged.
 func _fill_expanse(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 57
+	rng.seed = GameState.ring_seed(57)
 	var area := half.x * half.y
 	for n in range(clampi(int(area * 0.025), 20, 80)):
 		var p := SimSpace.scatter_point(rng, half, HUB)
@@ -366,7 +366,7 @@ func _fill_expanse(half: Vector2) -> void:
 # Outlying ruins / hedges / rose beds out in the garden so the reach has destinations.
 func _add_outlying_landmarks(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 59
+	rng.seed = GameState.ring_seed(59)
 	var ring_r := minf(half.x, half.y)
 	for i in range(6):
 		var ang := TAU * float(i) / 6.0 + rng.randf_range(-0.25, 0.25)

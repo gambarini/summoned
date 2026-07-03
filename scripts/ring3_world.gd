@@ -82,7 +82,7 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 31  # Ring 3's own scatter seed
+	rng.seed = GameState.ring_seed(31)  # Ring 3's own scatter seed
 	# Walkable half-extents from the shared arena knob (SimSpace.PLAY_SCALE).
 	var half := SimSpace.half_world()
 
@@ -230,7 +230,7 @@ const HUB := 13.0
 # the authored seed-31 layout is byte-for-byte unchanged.
 func _fill_expanse(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 41
+	rng.seed = GameState.ring_seed(41)
 	var area := half.x * half.y
 	for n in range(clampi(int(area * 0.05), 40, 200)):
 		var p := SimSpace.scatter_point(rng, half, HUB)
@@ -254,7 +254,7 @@ func _fill_expanse(half: Vector2) -> void:
 # A few monoliths / sunken terraces / glyph arrays out in the reach as destinations.
 func _add_outlying_landmarks(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 47
+	rng.seed = GameState.ring_seed(47)
 	var ring_r := minf(half.x, half.y)
 	for i in range(5):
 		var ang := TAU * float(i) / 5.0 + rng.randf_range(-0.3, 0.3)

@@ -55,20 +55,29 @@ You have GodotIQ MCP tools (`godotiq_*`). ALWAYS prefer them over raw file opera
 
 # Summoned — Claude Code Instructions
 
-Godot 4 project. **Low-resolution 3D isometric pixel art** — cel-shaded 3D world seen through an orthographic, freely-rotatable camera, rendered at a low internal resolution and palette-snapped so it reads as hand-drawn pixel art. Characters are camera-facing billboards from pixel sprite sheets. Nearest-neighbour filtering throughout — no bilinear anywhere.
+Godot 4 project. **Low-resolution 3D isometric pixel art** — cel-shaded 3D world seen through an orthographic, freely-rotatable camera, rendered at a low internal resolution and palette-snapped so it reads as hand-drawn pixel art. Characters and creatures are **procedural low-poly cel-shaded 3D meshes** — the warrior pattern: a `*_mesh.gd` (`Node3D` rig built in code) driven by a `*_sync.gd` from the still-authoritative 2D sim (Option B hybrid). See `warrior_mesh.gd` + `warrior_sync.gd`. The low-res render + palette snap keep the look pixel-art-ish; the characters are meshes, **not** billboard sprites. Nearest-neighbour filtering throughout — no bilinear anywhere.
 
 > **Direction change (2026-06):** the project pivoted from 2D top-down to low-res 3D isometric. **Migration Phases 0–4 and all of Phase 2b are done (2026-06-17): the Ring 1 run loop (`main.tscn`) plays in 3D end-to-end** — `IsoRig` rig + `Ring1World` terrain + warrior/enemy/arc billboards synced from the still-authoritative 2D sim (Option B hybrid), 2D HUD on top; the warrior's **full visual identity** reads in 3D (hover bob, notation drift, resonance/burst shockwave rings, the Hollow chest wound, the hem/shimmer overlay shader). The full run→fight→die→base→re-summon loop is playthrough-verified. Remaining: **Phase 5** (rings 2–5, camera pixel-snap, bounds/aspect tuning; optional warm-effect palette retune — the cool palette cool-shifts the Hollow ember to pink, accepted as-is). **Update (2026-06-21):** rings 1–5 are now **explore-scale** (huge open arenas) — the play-area size is one knob, `SimSpace.PLAY_SCALE` (=4), and the old fixed `480×270` box / `28×22` plateau / `±13.0,±6.94` footprint numbers are the `PLAY_SCALE=1` case (superseded; walls + enemy pocket-spawns + every ring's terrain derive from `SimSpace.half_world()`). `base.tscn` is now a **3D villa** (`villa_world.gd`, Anthe + ceremony dais under the IsoRig), no longer a 2D diorama. The original spike `scenes/ring1_iso_test.tscn` is the read-only look reference. See `docs/RENDERING_3D.md` (the pipeline) and `docs/MIGRATION_3D.md` (the plan + current status).
 
-Design intent: `../idea/Summoned_GDD.html` (§16 Art Direction reflects the 3D pivot).  
+> **Art direction → 3D meshes (2026-06-30):** the game has fully moved to 3D — the original 2D-pixel-art / camera-facing-billboard plan is **deprecated**. Every character/creature now follows the warrior's procedural-mesh pattern (above). The warrior is the proven reference; enemies (`enemy.gd` = `CharacterBody2D` + `Polygon2D` billboards) are **placeholders** to be rebuilt as meshes. New ring creatures must be authored as meshes, not sprites. The 2D *sim* stays the gameplay-truth layer — only *presentation* is 3D. (The 2026-06 migration note below predates this and still says "warrior/enemy/arc billboards" — only the enemy/arc placeholders are still billboards; the warrior is a mesh.)
+
+Design intent: `../idea/Summoned_GDD.html` (§16 Art Direction still describes the old 2D-pixel/billboard plan — **pending update** to the 3D-mesh direction).  
 Character references: `docs/[CHARACTER].md` — see Character Docs below.
 
 ---
 
 ## Current Priority
 
-Close the run loop: **run start → fight → die → tribe cost → base → run again.**
+Make runs **matter and vary** — the loop and per-run map randomization are done; the gap is now purpose and generator quality.
 
-Scenes exist for warrior, enemies (fleer, phaser), base, HUD, and main. Game state is wired via `game_state.gd`. The loop is not yet closed — death does not flow into tribe cost, base screen, or re-summoning.
+**Done:**
+- **Run loop is closed** (`main.gd`): death → `grief_reserve − 1` → `base.tscn`; extract → `current_ring + 1` → `base.tscn`; `clock_ticks` advances each run-end. Verified end-to-end.
+- **Maps are per-run randomized** (2026-06-30): every ring world + enemy layout derives RNG from `GameState.ring_seed(local)`, offset by a per-summon `GameState.run_seed` rolled in `main.gd._ready()`. `run_seed == 0` (and `GameState.lock_seed = true`) reproduces the original pinned layouts byte-for-byte for the look reference / tests. Previously every run was seed-pinned identical.
+
+**Next (the real roguelike work):**
+1. **Give the map a progression hook** — clearing/objective/exit should drive progression. Today `_on_run_cleared()` (`main.gd`) only shows a banner; the only way deeper is manually pressing `[E]` to extract, so combat has no payoff loop.
+2. **Structure over scatter** — the generator only scatters props + enemy pockets in an open box (no chokepoints, cover, landmarks, objectives), so different seeds look different but play the same. Make the space create decisions.
+3. **Fix the meta-economy** — `grief_reserve` only ever drains (−1 per death, never replenished), a one-way death spiral; and `clock_ticks` reaching 10 ("LAST SONG") has no terminal outcome. Define a grief source and a clock-10 resolution (win/lose).
 
 ---
 

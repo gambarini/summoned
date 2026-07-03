@@ -106,7 +106,7 @@ func _box(size: Vector3, col: Color) -> MeshInstance3D:
 
 func _build_terrain() -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 12  # Ring 2's own scatter seed (Ring 1 uses 7)
+	rng.seed = GameState.ring_seed(12)  # Ring 2's own scatter seed (Ring 1 uses 7)
 	# Walkable half-extents from the shared arena knob (SimSpace.PLAY_SCALE); all
 	# terrain extents derive from it so the ground covers the warrior's reach.
 	var half := SimSpace.half_world()
@@ -257,7 +257,7 @@ func _make_ruined_wall(base_pos: Vector3, length: float, yaw_deg: float) -> Node
 	wall.position = base_pos
 	wall.rotation_degrees.y = yaw_deg
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 21
+	rng.seed = GameState.ring_seed(21)
 	# A crumbling row of stone blocks of varying heights (the broken Singer wall).
 	var segs := int(length / 1.1)
 	for i in range(segs):
@@ -286,7 +286,7 @@ func _make_arch(base_pos: Vector3) -> Node3D:
 	arch.add_child(lintel)
 	# Flora overtaking the ruin — a couple of spikes climbing the pillars.
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 5
+	rng.seed = GameState.ring_seed(5)
 	arch.add_child(_make_flora_spike(Vector3(-1.3, 0.0, 0.4), 2.2, rng))
 	arch.add_child(_make_flora_spike(Vector3(1.3, 0.0, -0.4), 1.6, rng))
 	return arch
@@ -315,7 +315,7 @@ const HUB := 13.0
 # hub's seed-12 layout is byte-for-byte unchanged.
 func _fill_expanse(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 23
+	rng.seed = GameState.ring_seed(23)
 	var area := half.x * half.y
 	for n in range(clampi(int(area * 0.03), 24, 90)):
 		var p := SimSpace.scatter_point(rng, half, HUB)
@@ -339,7 +339,7 @@ func _fill_expanse(half: Vector2) -> void:
 # A few Singer ruins out in the reach so exploration has destinations.
 func _add_outlying_landmarks(half: Vector2) -> void:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 31
+	rng.seed = GameState.ring_seed(31)
 	var ring_r := minf(half.x, half.y)
 	for i in range(5):
 		var ang := TAU * float(i) / 5.0 + rng.randf_range(-0.3, 0.3)

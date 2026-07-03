@@ -16,6 +16,33 @@ var clock_ticks: int = 0
 ## real run-structure design — see `advance_ring()` / `reset_ring()`.
 var current_ring: int = 1
 
+## --- Per-run map seed (roguelike map variety) ---------------------------------
+## Each ring world + the enemy layout derives its RNG from `ring_seed(local)`, which
+## offsets a per-summon `run_seed` onto every layer's local constant. `run_seed == 0`
+## reproduces the original byte-for-byte pinned layouts (the look-reference baseline),
+## so the default — and any scene that never calls `roll_run_seed()` (spikes, tests) —
+## stays unchanged. `main.gd` rolls a fresh seed at the start of each run.
+var run_seed: int = 0
+## Debug: when true, `roll_run_seed()` pins `run_seed` to 0 (the stable reference
+## layout). Flip on to reproduce the pre-roguelike fixed maps on demand.
+var lock_seed: bool = false
+
+## Roll the seed that defines this run's map. Call once when a run begins. Locked mode
+## pins it to 0; otherwise a fresh random seed, stored so the run stays reproducible
+## (a future replay-seed / daily-run hook can assign `run_seed` directly instead).
+func roll_run_seed() -> void:
+	if lock_seed:
+		run_seed = 0
+		return
+	randomize()
+	run_seed = randi()
+
+## Mix this run's seed onto a layer's local constant. Layers keep distinct local seeds
+## (so they don't correlate within a run); `run_seed` shifts the whole set per run.
+## `run_seed == 0` returns the local seed unchanged, preserving the pinned layouts.
+func ring_seed(local_seed: int) -> int:
+	return local_seed + run_seed
+
 func starting_coherence() -> int:
 	if grief_reserve >= 7:
 		return 10

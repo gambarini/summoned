@@ -13,6 +13,7 @@ const EnemyScene       := preload("res://scenes/enemy.tscn")
 const EnemyFleerScene  := preload("res://scenes/enemy_fleer.tscn")
 const EnemyPhaserScene := preload("res://scenes/enemy_phaser.tscn")
 const EnemyBase        := preload("res://scripts/enemy.gd")
+const ThresholdScript  := preload("res://scripts/creature_threshold.gd")  # F1 test creature
 
 const ROT_SPEED := 90.0  # deg/sec free camera orbit (Q/E), pitch stays locked
 
@@ -39,6 +40,19 @@ const POCKET_RADIUS := 90.0        # px spread within a cluster
 const HOME_SAFE_RADIUS := 260.0    # px around the summon point kept clear of spawns
 const SPAWN_MARGIN := 140.0        # px inset from the walls so nothing spawns in a corner
 
+# --- Extraction gate (F3): progression is a place you *reach* ----------------
+# One resonant beacon in the ring; standing within GATE_ACTIVATION_RADIUS of it arms
+# the `extract` action (warrior.can_extract), so descending a ring means crossing the
+# arena to the gate rather than pressing F anywhere. Reach-only + far from the summon
+# point (avoidance-first: no must-clear). Rings may override the spot via
+# extraction_point(); default is the centre of the far (north) edge. This closes the
+# progression loop; it does NOT make combat mandatory — that's C3 (structured gen).
+const GATE_MARGIN := 160.0            # px inset from the far wall
+const GATE_ACTIVATION_RADIUS := 70.0  # px around the gate that arms extraction
+const GATE_PULSE_SPEED := 2.2         # rad/s beacon breathing
+const GATE_COLOR := Color(0.627, 0.502, 0.878, 1.0)        # resonance purple, idle
+const GATE_COLOR_BRIGHT := Color(0.820, 0.745, 1.0, 1.0)   # brightened while in range
+
 var _rig: IsoRig
 var _world: Node3D       # the current ring's terrain builder (RingNWorld)
 var _warrior_sync: WarriorSync
@@ -47,7 +61,18 @@ var _world_sync: WorldSync
 var _enemies_alive := 0
 var _run_ended := false
 
+var _gate_pos: Vector2
+var _gate_root: Node3D
+var _gate_pad_mat: StandardMaterial3D
+var _gate_shaft_mat: StandardMaterial3D
+var _gate_phase: float = 0.0
+var _gate_prompt_shown: bool = false
+
 func _ready() -> void:
+	# Roll this run's map seed FIRST: the ring world build + enemy spawns both derive
+	# from it, so every summon explores a fresh layout (GameState.lock_seed pins it).
+	GameState.roll_run_seed()
+
 	# --- Walls: rebuild the boundary box from the shared SimSpace bounds, so the
 	# arena size is the single PLAY_SCALE knob (the .tscn's legacy 480x270 box is
 	# replaced at runtime). Symmetric about SIM_ORIGIN, so the warrior start + all
@@ -101,6 +126,8 @@ func _ready() -> void:
 	if GameState.is_last_song():
 		$HUD.show_status("LAST SONG", Color("#C4547A"))
 	_spawn_enemies()
+	_spawn_test_creatures()
+	_setup_extraction_gate()
 
 
 # Replace the boundary walls with a box derived from SimSpace.box_min/max_px(), so
@@ -162,6 +189,8 @@ func _process(delta: float) -> void:
 	if is_instance_valid(_warrior_sync):
 		_rig.set_follow_target(_warrior_sync.get_billboard_position())
 
+	_tick_extraction_gate(delta)
+
 
 func _end_run() -> void:
 	_run_ended = true
@@ -196,7 +225,7 @@ func _spawn_enemies() -> void:
 	var last_song := GameState.is_last_song()
 	var mix: Array = SPAWN_MIX.get(GameState.current_ring, SPAWN_MIX[1])
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 1000 + GameState.current_ring  # deterministic layout per ring
+	rng.seed = GameState.ring_seed(1000 + GameState.current_ring)  # per-ring character, per-run layout
 	var lo := SimSpace.box_min_px() + Vector2(SPAWN_MARGIN, SPAWN_MARGIN)
 	var hi := SimSpace.box_max_px() - Vector2(SPAWN_MARGIN, SPAWN_MARGIN)
 	for p in range(POCKETS_PER_RING):
@@ -221,3 +250,110 @@ func _spawn_enemies() -> void:
 			_enemies_alive += 1
 			if last_song:
 				e.force_amplify()
+
+
+# F1 test harness: drop a few Thresholds into Ring 1 at fixed offsets near the summon
+# point so the new Creature state machine (Still→Assessing→Committed→Withdrawn + the
+# Resonance intervention window) can be watched directly. Kept OFF the random SPAWN_MIX
+# and the _enemies_alive clear-count on purpose — this validates the framework without
+# touching the verified run loop. Remove once Thresholds graduate to real spawning.
+func _spawn_test_creatures() -> void:
+	if GameState.current_ring != 1:
+		return
+	var offsets := [Vector2(0, -150), Vector2(-140, -50), Vector2(150, -40)]
+	for i in range(offsets.size()):
+		var t := ThresholdScript.new()
+		t.name = "Threshold%d" % i
+		add_child(t)
+		t.global_position = SimSpace.SIM_ORIGIN + offsets[i]
+
+
+# --- Extraction gate (F3) -----------------------------------------------------
+# Place the gate (ring override, else the default far-edge point) and build its 3D
+# beacon under the rig. Ring 1's gate is active from spawn (reach-only); the single
+# seam for a later disarmed-until-objective ring is the proximity gate in
+# _tick_extraction_gate (leave can_extract false until the objective clears).
+func _setup_extraction_gate() -> void:
+	_gate_pos = _default_gate_pos()
+	if _world.has_method("extraction_point"):
+		_gate_pos = _world.extraction_point()
+	_gate_root = _build_gate_beacon(_gate_pos)
+	_rig.add_world_child(_gate_root)
+
+
+# Default extraction point: centre of the far (north) wall, inset so it never lands
+# in a wall or spawn corner. Deterministic for the slice; the structured generator
+# (C3) will later place it behind decisions.
+func _default_gate_pos() -> Vector2:
+	return Vector2(SimSpace.SIM_ORIGIN.x, SimSpace.box_min_px().y + GATE_MARGIN)
+
+
+# A resonant beacon: a flat ground pad + a rising light shaft, both unshaded so they
+# read as light through the cel/palette pipeline. Materials are kept for the pulse.
+func _build_gate_beacon(sim_pos: Vector2) -> Node3D:
+	var root := Node3D.new()
+	root.name = "ExtractionGate"
+	root.position = SimSpace.to_world(sim_pos, 0.5)  # plateau top
+
+	var pad := MeshInstance3D.new()
+	pad.name = "Pad"
+	var pad_mesh := CylinderMesh.new()
+	pad_mesh.top_radius = 2.1
+	pad_mesh.bottom_radius = 2.1
+	pad_mesh.height = 0.12
+	pad.mesh = pad_mesh
+	pad.position = Vector3(0.0, 0.07, 0.0)  # a hair above the ground, no z-fight
+	_gate_pad_mat = _make_gate_material(GATE_COLOR, 0.7)
+	pad.material_override = _gate_pad_mat
+	root.add_child(pad)
+
+	var shaft := MeshInstance3D.new()
+	shaft.name = "Shaft"
+	var shaft_mesh := CylinderMesh.new()
+	shaft_mesh.top_radius = 0.28
+	shaft_mesh.bottom_radius = 0.5
+	shaft_mesh.height = 4.5
+	shaft.mesh = shaft_mesh
+	shaft.position = Vector3(0.0, 2.25, 0.0)  # base sits on the pad, rises up
+	_gate_shaft_mat = _make_gate_material(GATE_COLOR, 0.55)
+	shaft.material_override = _gate_shaft_mat
+	root.add_child(shaft)
+	return root
+
+
+func _make_gate_material(color: Color, alpha: float) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(color.r, color.g, color.b, alpha)
+	return mat
+
+
+# Arm extraction while the warrior stands in the gate; drive the beacon pulse and an
+# edge-triggered HUD prompt. Proximity is checked here (not via Area2D) to match the
+# codebase's distance-gate idiom (warrior.gd _do_resonance) — no collision config.
+func _tick_extraction_gate(delta: float) -> void:
+	if _gate_root == null or _run_ended:
+		return
+	_gate_phase += delta
+	var in_range: bool = $Warrior.global_position.distance_to(_gate_pos) <= GATE_ACTIVATION_RADIUS
+	$Warrior.can_extract = in_range
+	_update_gate_visual(in_range)
+	if in_range != _gate_prompt_shown:
+		_gate_prompt_shown = in_range
+		if in_range:
+			$HUD.show_status("DESCEND: PRESS F", GATE_COLOR_BRIGHT)
+		else:
+			$HUD.show_status("", Color.WHITE)
+
+
+func _update_gate_visual(in_range: bool) -> void:
+	if _gate_shaft_mat == null:
+		return
+	var pulse: float = 0.6 + 0.4 * sin(_gate_phase * GATE_PULSE_SPEED)
+	var tint: Color = GATE_COLOR_BRIGHT if in_range else GATE_COLOR
+	var shaft_a: float = (0.85 if in_range else 0.5) * pulse
+	_gate_shaft_mat.albedo_color = Color(tint.r, tint.g, tint.b, shaft_a)
+	var pad_a: float = 0.9 if in_range else 0.6
+	_gate_pad_mat.albedo_color = Color(tint.r, tint.g, tint.b, pad_a)
