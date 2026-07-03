@@ -266,6 +266,32 @@ func _spawn_test_creatures() -> void:
 		t.name = "Threshold%d" % i
 		add_child(t)
 		t.global_position = SimSpace.SIM_ORIGIN + offsets[i]
+	_spawn_test_herd()
+
+
+# R1a test harness: one Pale Herd grazing north-west of the summon point — far enough
+# out that the warrior walks INTO its detection web rather than spawning inside it.
+# Same rules as the Thresholds above: off SPAWN_MIX, off the clear-count. The herd
+# array is handed to every walker (self included) — it IS the collective: any member's
+# detection alerts all of them; regrouping counts mates from it.
+func _spawn_test_herd() -> void:
+	const HERD_SIZE := 7
+	const HERD_HOME := Vector2(-320, -240)  # px from SIM_ORIGIN
+	const HERD_SPREAD := 60.0
+	var walker_script: GDScript = load("res://scripts/creature_pale_walker.gd")
+	var rng := RandomNumberGenerator.new()
+	rng.seed = GameState.ring_seed(3000)
+	var herd: Array = []
+	for i in range(HERD_SIZE):
+		var w: CharacterBody2D = walker_script.new() as CharacterBody2D
+		w.name = "PaleWalker%d" % i
+		add_child(w)
+		w.global_position = SimSpace.SIM_ORIGIN + HERD_HOME + Vector2(
+			rng.randf_range(-HERD_SPREAD, HERD_SPREAD),
+			rng.randf_range(-HERD_SPREAD, HERD_SPREAD))
+		herd.append(w)
+	for w in herd:
+		w.set_herd(herd)
 
 
 # --- Extraction gate (F3) -----------------------------------------------------

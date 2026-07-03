@@ -56,6 +56,7 @@ const FREQ_DISSONANT := 0
 # placeholders, until they are rebuilt as meshes too).
 const CREATURE_MESH_SCRIPTS := {
 	&"CreatureThreshold": "res://scripts/threshold_mesh.gd",
+	&"CreaturePaleWalker": "res://scripts/pale_walker_mesh.gd",
 }
 
 var _rig: IsoRig
