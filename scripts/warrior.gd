@@ -385,6 +385,12 @@ func _dir_to_vector(d: String) -> Vector2:
 
 # Begin an i-frame dash in the current move direction (or the facing, if standing).
 func _start_dash() -> void:
+	# A dash out of ATTACK_RECOVERY keeps the gameplay `chain` (deliberate) but must
+	# drop the presentation combo step: the dash ends straight in IDLE without passing
+	# _on_recovery_expired, and a stale step makes the idle guard render as that step's
+	# START pose (WarriorSync draws set_attack(0, step)) — the warrior stands frozen
+	# mid-flourish. A dash-cancelled attack restarts at step 0 anyway (_try_attack).
+	_combo_step = 0
 	var dir := _read_dir()
 	if dir.length() < 0.1:
 		dir = _dir_to_vector(_facing_dir)
