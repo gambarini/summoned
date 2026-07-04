@@ -676,14 +676,20 @@ func _sync_position() -> void:
 # Procedural animation: walk cycle from velocity, sword swing from the attack states,
 # cape sway from both. No skeleton — these rotate the mesh's leg/arm/cape pivots.
 const WALK_FREQ := 9.0       # rad/s leg cadence at full speed
-# Per-phase swing rates: a slow draw-back on startup (anticipation dwell), a fast drive
+# Per-phase swing pacing: an exponential anticipation draw on startup, a fast drive
 # through the active hit, and a slow settle on recovery. One flat rate read as a weightless
 # constant-velocity sweep; splitting it is half the "weight" pass (the mesh's _ease_strike
 # curve, peaking at ~62% of the arc, is the other half). STRIKE_RATE 12 plays the whip in
 # ~0.10s (≈ the 0.11s active window) — fast but *visible*; the old 26 finished the whole
 # arc in ~3 frames and read as a jerky pop. RECOVER_RATE is gentle because recovery now
 # HOLDS near the landing pose (see atk_target below) rather than pulling the blade back.
-const WINDUP_RATE := 7.0
+# The windup is NOT a move_toward: any finite rate either arrives early and freezes (the
+# old rate-7 dead-hold — target hit in ~0.04s, then a static pose for the rest of the
+# 0.117s startup, reading as input lag) or reacts sluggishly to the press. The exponential
+# draw (see _animate) pulls hard on the press frame and keeps creeping deeper the whole
+# startup — the coil never stops moving until the strike releases it.
+const WINDUP_TARGET := -0.32  # coil depth; the mesh extrapolates t<0 behind the start pose
+const WINDUP_EASE := 14.0     # 1/s exponential draw — ~80% of the coil by startup's end
 const STRIKE_RATE := 12.0
 const RECOVER_RATE := 2.5
 const HITSTOP_DURATION := 0.07   # seconds the swing freezes at the contact pose on a landed hit
@@ -767,8 +773,7 @@ func _animate(delta: float) -> void:
 	var rate := RECOVER_RATE
 	match s:
 		"ATTACK_STARTUP":
-			atk_target = -0.25
-			rate = WINDUP_RATE
+			atk_target = WINDUP_TARGET
 		"ATTACK_ACTIVE":
 			atk_target = 1.0
 			rate = STRIKE_RATE
@@ -800,6 +805,11 @@ func _animate(delta: float) -> void:
 		# _on_melee_hit) so the strike reads as force meeting resistance. Locomotion/cape
 		# still update — only the swing param freezes.
 		_hitstop -= delta
+		_mesh.set_attack(_atk, cs)
+	elif s == "ATTACK_STARTUP":
+		# Anticipation draw: exponential approach so the coil moves EVERY startup frame —
+		# a hard reactive pull on the press frame, decelerating but never static.
+		_atk = lerpf(_atk, atk_target, 1.0 - exp(-WINDUP_EASE * delta))
 		_mesh.set_attack(_atk, cs)
 	else:
 		_atk = move_toward(_atk, atk_target, delta * rate)

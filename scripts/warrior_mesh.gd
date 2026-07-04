@@ -241,7 +241,9 @@ func set_walk(phase: float, amount: float) -> void:
 	if _knee_r: _knee_r.rotation.x = (0.5 - 0.5 * cos(phase + PI)) * KNEE_WALK * amount
 
 
-## Attack swing: `t` 0 (rest / combat guard) .. 1 (full strike). `step` picks the swing —
+## Attack swing: `t` 0 (rest / combat guard) .. 1 (full strike); t < 0 is the startup
+## windup — the pose extrapolates BACK past the swing's start, coiling away along the same
+## swing line before the strike releases it. `step` picks the swing —
 ## 0 left->right, 1 right->top, 2 top->down, 3 back-left — and each swing sweeps from the
 ## PREVIOUS step's landing pose (step 0 from the guard) to this step's, so a chained combo
 ## reads as one continuous flourish whipping across the body instead of four resets. The
@@ -257,8 +259,11 @@ func set_attack(t: float, step := 0) -> void:
 	# fastest at ~STRIKE_PEAK, crests just past the landing (STRIKE_OVERSHOOT follow-through),
 	# then settles back to exactly 1.0. `we` exceeds 1.0 near the crest; the lerps extrapolate
 	# past the landing for the overshoot, then snap back. This is what gives the constant-rate
-	# swing its weight — a linear lerp reads weightless.
-	var we := _ease_strike(w)
+	# swing its weight — a linear lerp reads weightless. Fed the UNCLAMPED t: negative t
+	# (the startup windup) maps to we < 0 and the lerps extrapolate BEHIND the start pose —
+	# the whole kinetic chain (arm, torso, stance) coils away along its own swing line.
+	# The leg-load/crouch weights below keep the clamped w, so the windup never flips them.
+	var we := _ease_strike(t)
 	var leg_idle := 1.0 - _last_walk_amt
 	# Sweep from the previous swing's landing to this swing's — the heart of the cross-body flow.
 	var a := _swing_waypoint(step - 1, leg_idle)   # START (guard for step 0)
@@ -325,8 +330,13 @@ func _swing_waypoint(step: int, leg_idle: float) -> Array:
 # weightless constant-velocity sweep. (Recovery holds a partial w, so it eases too.)
 const STRIKE_PEAK := 0.62
 const STRIKE_OVERSHOOT := 0.12
+# Windup (w < 0): pass the coil through linearly — WarriorSync's exponential draw already
+# shapes the motion in time, so the curve only scales how much of it reaches the pose.
+const WINDUP_GAIN := 0.8
 
 func _ease_strike(w: float) -> float:
+	if w < 0.0:
+		return maxf(w, -1.0) * WINDUP_GAIN
 	w = clampf(w, 0.0, 1.0)
 	if w <= STRIKE_PEAK:
 		var u := w / STRIKE_PEAK                        # 0..1, accelerating rise to the crest

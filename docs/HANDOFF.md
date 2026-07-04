@@ -151,14 +151,53 @@ assets, matching the art direction):
   and the synth voicing are placeholder guesses; expect an ears-on tune pass. No
   sounds yet for: hurt, death/summon, Resonance/Song, enemy-side events, footsteps.
 
+## Just completed — Combat feel pass 6: windup coil (2026-07-04, verified in-engine)
+
+Backlog item 1 (windup dead-hold). Root cause was worse than the item said: `_atk` went
+0→−0.25 in ~0.036s then held, **but `warrior_mesh.gd` clamped `t` to 0 in `set_attack`**,
+so negative `_atk` never posed anything — the entire startup rendered a completely static
+mesh (the anticipation only ever existed in the probe numbers; the "coils on the windup
+(t<0)" comment at `TORSO_TWIST` was pre-clamp stale).
+
+- **Mesh renders the coil** (`warrior_mesh.gd`): `set_attack` now feeds `_ease_strike`
+  the UNCLAMPED `t`; a new negative branch (`WINDUP_GAIN 0.8`, clamped at −1) returns
+  `we < 0`, so the pose lerps extrapolate BEHIND the swing's start pose — the whole
+  kinetic chain (arm, torso, stance) coils away along its own per-step swing line, for
+  free on every combo step. The leg-load/crouch/walk-counter weights keep the clamped
+  `w`, so the windup can't flip them.
+- **Continuous draw replaces arrive-and-freeze** (`warrior_sync.gd`): `WINDUP_RATE 7.0`
+  → `WINDUP_TARGET −0.32` + `WINDUP_EASE 14.0`; ATTACK_STARTUP now uses an exponential
+  approach (`lerpf(_atk, target, 1−exp(−14·delta))`) in `_animate` instead of
+  `move_toward` — a hard reactive pull on the press frame, still creeping deeper on the
+  last startup frame. Never static.
+- Verified live (per-physics-frame probe of `_atk` + the actual `_arm.rotation.x` /
+  `_torso.rotation.y` node values): swing 1 startup = 9 frames, `_atk` strictly
+  decreasing every frame −0.067→−0.281, arm pitch −2.60→−2.82 (coils past the guard),
+  torso twist 0.32→0.57; active whips through with the overshoot intact (arm crests
+  −1.50 past the −1.60 landing); chained swing 2 (step 1) resets to 0 and coils again
+  −1.53→−1.31 off the step-0 landing, continuous every frame; guard-return settle
+  unaffected; console clean; both scripts compile 0 errors.
+- **Numbers-verified only** (the numbers here ARE the pose nodes, but nobody has eyeballed
+  the coil at speed) — fold into the P1 playthrough alongside the audio/husk checks.
+
+## Also fixed — stale combo step after dash-out-of-recovery (2026-07-04, verified in-engine)
+
+Found live when the user's warrior got stuck standing in the step-2 chop-landing stance
+(leaning forward off his feet) while IDLE. Root cause: `_combo_step` is only reset by
+`_on_recovery_expired` / HURT / a fresh `_try_attack`, but a **buffered dash out of
+ATTACK_RECOVERY** stops the RecoveryTimer and the dash ends straight in IDLE — the stale
+step made WarriorSync render idle as `set_attack(0, step)` = that step's START pose
+instead of the guard. Reproduced with a frame probe (chain to step 1 → `_start_dash()`
+during recovery → IDLE cs1), then fixed: `_start_dash()` (`warrior.gd`) now zeroes
+`_combo_step` (the gameplay `chain` deliberately survives the dash, as before; a
+dash-cancelled attack restarts at step 0 anyway). Verified the guard pose restores.
+
 ### Combat feel backlog (reviewed, NOT fixed — priority order)
 
-1. **Windup dead-hold**: `_atk` reaches its windup target in ~0.036s then holds static
-   for the rest of the 0.117s startup — reads as input lag, not anticipation.
-2. **Resonance (R) / Song (G) have no body animation** on the mesh — only the ground disc.
-3. **Impact extras** (deferred from pass 2): freeze the struck enemy for the hitstop beat;
+1. **Resonance (R) / Song (G) have no body animation** on the mesh — only the ground disc.
+2. **Impact extras** (deferred from pass 2): freeze the struck enemy for the hitstop beat;
    small camera kick on a landed hit (no screen shake exists yet).
-4. **Audio tune pass + coverage** (pass 5 shipped placeholder swing/hit/dash only):
+3. **Audio tune pass + coverage** (pass 5 shipped placeholder swing/hit/dash only):
    ears-on volume/voicing check, then hurt/death/summon/Resonance/Song/enemy sounds.
 
 ## Just completed — F1 (verified in-engine)
@@ -355,10 +394,9 @@ procedural cel-meshes ("husks") through the same `CREATURE_MESH_SCRIPTS` seam.
    judge whether read→avoid/intervene feels good BEFORE generalizing (C1 coherence,
    C2 echo chain, C3 structured generator). The backlog's gate says fix combat design
    here while it's cheap. Fold into the same playthrough: an ears-on listen of the
-   pass-5 audio AND an eyes-on look at the new husk meshes — both are only
-   numbers-verified.
-2. **Combat feel backlog item 1** (windup dead-hold) — the last purely-mechanical feel
-   item; the others now want eyes/ears-on judgment first.
+   pass-5 audio, an eyes-on look at the new husk meshes AND the pass-6 windup coil —
+   all three are only numbers-verified. (The windup dead-hold was the last
+   purely-mechanical feel item; the remaining backlog wants eyes/ears-on judgment first.)
 
 ## Gotchas
 
