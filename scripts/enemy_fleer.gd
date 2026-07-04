@@ -1,4 +1,5 @@
 extends "res://scripts/enemy.gd"
+class_name EnemyFleer
 
 const FLEE_SPEED := 90.0
 

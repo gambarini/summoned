@@ -309,16 +309,55 @@ mesh-first, no billboard stage). Backlog R1a is done; the Ring-1 P1 creature sli
 - NOT built: the Isolated corrupted variant's read-interference aura (GDD: disrupts
   nearby Resonance reads) — the stuck-Uneasy state machine exists, the aura doesn't.
 
+## Also completed — Enemy placeholders → cel-meshes (2026-07-03, verified in-engine)
+
+The last character billboards are gone: enemy.gd / fleer / phaser now render as
+procedural cel-meshes ("husks") through the same `CREATURE_MESH_SCRIPTS` seam.
+
+- Sim-side (tiny, logic untouched): `class_name Enemy` / `EnemyFleer` / `EnemyPhaser`
+  added (the dispatch keys on script class_name), and enemy.gd got a public
+  `get_state() -> StringName` (&"idle"/&"chase"/&"attack"/&"dead") — the same contract
+  creature.gd already gives the mesh layer, so meshes never read `_state`.
+- `scripts/enemy_mesh.gd` (new, base "husk") — hunched grief-echo stalker: torso +
+  cowl + jutting head, hanging claw-arms, stub legs; desaturated plum-charcoal palette
+  kept clear of every signal hue. Speed-driven gait/bob + chase lean; ATTACK rears the
+  body and raises the claws (smoothed `_rear` channel). The tell renders ONLY on
+  unshaded channels (eye band + chest seam) tinted per-frame from `Visual.color` —
+  the F2 hidden-grey gate, reveal colour, amplify orange, white hit flash, red strike
+  flash and the WorldSync pip all work unchanged. Stagger squash (`visual.scale`) and
+  death shrink (`body.scale`) mirror via root scale, billboard-path parity. Subclass
+  hooks: `_build_geometry(rig)` + `_animate(body, state, delta)` + knob vars in `_init`.
+- `scripts/enemy_fleer_mesh.gd` — tall/thin/backswept runner, steep sprint lean, fast
+  gait. Detonation tell: peeks `_cornered_timer` (presentation-only read of a private
+  channel — no public getter) and trembles harder as the 2s fuse builds, so the
+  explosion stops being unreadable — the quiver IS the tell, like the Herd's hum.
+- `scripts/enemy_phaser_mesh.gd` — floating 4-facet crystal bipyramid; the tell is the
+  whole equatorial band (its identity is the openly-worn frequency flip). Spin 1.1→3.0
+  with speed, 6.0 in ATTACK; hover bob replaces the gait.
+- `world_sync.gd` — 3 dict entries + comment updates; the billboard path stays as the
+  fallback for unlisted future creatures (nothing uses it today; attack arcs unaffected).
+- Verified live: 30/30 enemy-group members mesh, 0 billboards (14 grunt + 2 fleer +
+  4 phaser + 3 Threshold + 7 Pale Walker); physics-frame probe: chase vel 40 →
+  speed_n 0.5 / lean 0.15, ATTACK rear 1.0 + claws −1.25 rad, tell `8898a8` hidden →
+  `c4547a` on reveal → `ffffff` hit flash, stagger scale (1.17, 0.83), phaser band
+  `c0a0f0`→`c4547a` across a flip, fleer quiver ±0.04 rad at fuse 0.8, kill → reap
+  30→29 with the mesh freed; screenshots confirm all three silhouettes + pips read;
+  46 scripts compile 0 errors. (Console noise during the probe — "Lambda capture …
+  freed" — was the probe's own freed refs, not a game bug.)
+- NOT done: the fleer's 2D explosion ring is still a 2D-only transient (invisible in
+  3D — pre-existing, listed in world_sync's deferred juice); no death dissolve beyond
+  the inherited scale-shrink; the husk look is numbers-verified + one screenshot —
+  fold an eyes-on judgment into the P1 playthrough.
+
 ## Next — pick one
 
 1. **P1 gate check, then C-track** — the Ring-1 slice (R1a/R1b/R1c) is done: play it and
    judge whether read→avoid/intervene feels good BEFORE generalizing (C1 coherence,
    C2 echo chain, C3 structured generator). The backlog's gate says fix combat design
-   here while it's cheap. Fold an ears-on listen of the new pass-5 audio into the same
-   playthrough — it has only been numbers-verified.
-2. **Enemy placeholders → meshes** — enemy.gd/fleer/phaser still render as flat billboard
-   tokens next to two mesh creatures; same dispatch seam makes this incremental.
-3. **Combat feel backlog item 1** (windup dead-hold) — the last purely-mechanical feel
+   here while it's cheap. Fold into the same playthrough: an ears-on listen of the
+   pass-5 audio AND an eyes-on look at the new husk meshes — both are only
+   numbers-verified.
+2. **Combat feel backlog item 1** (windup dead-hold) — the last purely-mechanical feel
    item; the others now want eyes/ears-on judgment first.
 
 ## Gotchas

@@ -1,4 +1,5 @@
 extends CharacterBody2D
+class_name Enemy
 
 signal enemy_died
 
@@ -100,6 +101,11 @@ func reveal(duration: float) -> void:
 	_reveal_timer = duration
 	if not _amplified and _state != State.DEAD:
 		_visual.color = COLORS[frequency]
+
+## Presentation-layer read (same contract as creature.gd's get_state): the
+## current state as a StringName, so the 3D mesh rig never touches _state.
+func get_state() -> StringName:
+	return [&"idle", &"chase", &"attack", &"dead"][_state]
 
 func _on_detect_entered(body: Node2D) -> void:
 	if _pacified:

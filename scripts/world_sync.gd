@@ -12,10 +12,10 @@ class_name WorldSync
 ## (The persistent player keeps its own specialised `WarriorSync`; this is only
 ## for the spawn/despawn crowd.)
 ##
-## Enemies are procedural `Polygon2D` tokens (no sprite sheet yet), so the
-## billboard is a camera-facing flat mesh built from the *same* polygon, tinted
-## from `_visual.color` each frame — the colour IS the gameplay signal (frequency
-## reveal / amplified orange / hit flash), so it must mirror live, not once.
+## Every current creature has a graduated cel-mesh (see CREATURE_MESH_SCRIPTS);
+## the legacy path — a camera-facing flat mesh built from the body's `Polygon2D`,
+## tinted from `_visual.color` each frame — remains as the fallback for anything
+## unlisted, since the colour IS the gameplay signal and must mirror live.
 ## Deferred juice (same split as Phase 2b): the fleer's explosion ring is a
 ## separate transient 2D node and won't render here.
 
@@ -52,11 +52,14 @@ const FREQ_DISSONANT := 0
 # Creatures whose presentation has graduated from the flat billboard to a
 # procedural cel-mesh (the warrior pattern — see threshold_mesh.gd). Keyed by
 # script class_name; the mesh script must expose build(rig) + sync_from(body,
-# delta). Anything not listed keeps the billboard path (the enemy/fleer/phaser
-# placeholders, until they are rebuilt as meshes too).
+# delta). Anything not listed keeps the billboard path (now just a fallback —
+# every current creature has graduated).
 const CREATURE_MESH_SCRIPTS := {
 	&"CreatureThreshold": "res://scripts/threshold_mesh.gd",
 	&"CreaturePaleWalker": "res://scripts/pale_walker_mesh.gd",
+	&"Enemy": "res://scripts/enemy_mesh.gd",
+	&"EnemyFleer": "res://scripts/enemy_fleer_mesh.gd",
+	&"EnemyPhaser": "res://scripts/enemy_phaser_mesh.gd",
 }
 
 var _rig: IsoRig

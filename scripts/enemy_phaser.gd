@@ -1,4 +1,5 @@
 extends "res://scripts/enemy.gd"
+class_name EnemyPhaser
 
 const PHASE_INTERVAL := 2.0
 
