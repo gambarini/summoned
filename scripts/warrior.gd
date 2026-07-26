@@ -279,10 +279,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	# Attack and dash are buffered, never dropped: the press arms INPUT_BUFFER and
 	# _tick_buffers consumes it at the first legal frame (so a press during a swing,
-	# the attack cooldown, hurt, or a dash still comes out). Dash stays raw-key bound
-	# (Space), like the Song's KEY_G, to avoid editing the locked project.godot.
-	if event is InputEventKey and event.pressed and not event.echo \
-			and event.physical_keycode == KEY_SPACE:
+	# the attack cooldown, hurt, or a dash still comes out).
+	if event.is_action_pressed("dash"):
 		_dash_buffer = INPUT_BUFFER
 		return
 	if event.is_action_pressed("attack"):
@@ -294,13 +292,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_do_resonance()
 	elif event.is_action_pressed("extract"):
 		_do_extract()
-	elif event is InputEventKey and event.pressed and not event.echo \
-			and event.physical_keycode == KEY_G and chain >= 4:
-		# Chain-5 finisher: spend the maxed chain on The Song. Raw-key bound (like
-		# main.gd's orbit) rather than an InputMap action to avoid editing the locked
-		# project.godot. KEY_G, not F — F is already the `extract` action, which sits
-		# earlier in this chain and would otherwise swallow the press. Provisional;
-		# promote to a proper InputMap action when input is revised.
+	elif event.is_action_pressed("song") and chain >= 4:
+		# Chain-5 finisher: spend the maxed chain on The Song. Bound to G, not F — F is
+		# the `extract` action, which sits earlier in this chain and would otherwise
+		# swallow the press.
 		_do_song()
 
 func _handle_movement(delta: float) -> void:

@@ -11,7 +11,13 @@ var _skip := 0
 
 func _ready() -> void:
 	print("\n=== SUMMONED TEST SUITE ===")
+	# The specs below assign GameState fields directly to drive their assertions. Saving
+	# is off for the whole suite so a test run can never overwrite the player's save;
+	# _test_persistence() turns it back on for its own scope and restores the file after.
+	GameState.persist_enabled = false
 	_test_game_state()
+	_test_economy()
+	_test_persistence()
 	_test_enemy_hits()
 	_test_enemy_states()
 	_test_warrior_coherence()
@@ -76,6 +82,142 @@ func _test_game_state() -> void:
 	_ok("grief=0  → 4",  GameState.starting_coherence() == 4)
 
 	GameState.grief_reserve = saved
+
+
+# ── GameState: the between-run economy ──────────────────────────────────
+
+func _test_economy() -> void:
+	print("\n[GameState economy]")
+	var snapshot: Array = [GameState.grief_reserve, GameState.clock_ticks,
+		GameState.current_ring, GameState.run_count, GameState.extractions]
+
+	# Waiting trades one tick of Anthe's Clock for reserve recovery.
+	GameState.grief_reserve = 4
+	GameState.clock_ticks = 2
+	_ok("wait() succeeds when both sides have room", GameState.wait())
+	_ok("wait() adds reserve", GameState.grief_reserve == 4 + GameState.GRIEF_GAIN_ON_WAIT)
+	_ok("wait() costs one tick", GameState.clock_ticks == 3)
+
+	# The regression this closes: at a capped clock, waiting used to be free reserve.
+	GameState.grief_reserve = 4
+	GameState.clock_ticks = GameState.MAX_CLOCK
+	_ok("wait() refused at a capped clock", not GameState.wait())
+	_ok("refused wait grants no reserve", GameState.grief_reserve == 4)
+
+	GameState.grief_reserve = GameState.MAX_GRIEF
+	GameState.clock_ticks = 2
+	_ok("wait() refused on a full reserve", not GameState.wait())
+	_ok("refused wait costs no tick", GameState.clock_ticks == 2)
+
+	# advance_clock() must report whether it actually moved.
+	GameState.clock_ticks = GameState.MAX_CLOCK - 1
+	_ok("advance_clock() true with room", GameState.advance_clock())
+	_ok("advance_clock() false at the cap", not GameState.advance_clock())
+	_ok("clock never exceeds MAX_CLOCK", GameState.clock_ticks == GameState.MAX_CLOCK)
+
+	# Death draws the reserve down net -1; a clean extraction recovers and buys the tick back.
+	GameState.grief_reserve = 6
+	GameState.clock_ticks = 4
+	GameState.current_ring = 3
+	GameState.end_run_death()
+	_ok("death nets -1 reserve", GameState.grief_reserve == 5)
+	_ok("death spends a tick", GameState.clock_ticks == 5)
+	_ok("death returns to Ring 1", GameState.current_ring == 1)
+
+	GameState.grief_reserve = 6
+	GameState.clock_ticks = 4
+	GameState.current_ring = 3
+	GameState.end_run_extract()
+	_ok("extraction recovers reserve", GameState.grief_reserve == 7)
+	_ok("extraction holds the clock still", GameState.clock_ticks == 4)
+	_ok("extraction descends a ring", GameState.current_ring == 4)
+
+	# The clock is a ratchet: at the cap an extraction refunds nothing, because nothing was
+	# spent. A good run must never make Anthe younger or undo LAST SONG.
+	GameState.clock_ticks = GameState.MAX_CLOCK
+	GameState.current_ring = 2
+	GameState.end_run_extract()
+	_ok("extraction at the cap does not rewind the clock",
+		GameState.clock_ticks == GameState.MAX_CLOCK)
+	_ok("extraction at the cap leaves LAST SONG standing", GameState.is_last_song())
+
+	# Grief zero is a cost, not a fail state: the ceremony is paid out of Anthe instead.
+	GameState.grief_reserve = 0
+	GameState.clock_ticks = 3
+	GameState.begin_summon()
+	_ok("exhausted summon ages the clock",
+		GameState.clock_ticks == 3 + GameState.CLOCK_COST_EXHAUSTED_SUMMON)
+	GameState.grief_reserve = 5
+	GameState.clock_ticks = 3
+	GameState.begin_summon()
+	_ok("funded summon costs no extra tick", GameState.clock_ticks == 3)
+	_ok("is_last_song() false below the cap", not GameState.is_last_song())
+	GameState.clock_ticks = GameState.MAX_CLOCK
+	_ok("is_last_song() true at the cap", GameState.is_last_song())
+
+	GameState.grief_reserve = snapshot[0]
+	GameState.clock_ticks = snapshot[1]
+	GameState.current_ring = snapshot[2]
+	GameState.run_count = snapshot[3]
+	GameState.extractions = snapshot[4]
+
+
+# ── GameState: save/load round-trip ─────────────────────────────────────
+
+# This is the one spec that needs the disk, so it snapshots the player's save file,
+# round-trips through it, and puts the original bytes back.
+func _test_persistence() -> void:
+	print("\n[GameState save/load]")
+	var had_file: bool = FileAccess.file_exists(GameState.SAVE_PATH)
+	var backup: PackedByteArray = PackedByteArray()
+	if had_file:
+		backup = FileAccess.get_file_as_bytes(GameState.SAVE_PATH)
+	var snapshot: Array = [GameState.run_count, GameState.grief_reserve,
+		GameState.extractions, GameState.clock_ticks, GameState.current_ring]
+
+	GameState.persist_enabled = true
+	GameState.run_count = 17
+	GameState.grief_reserve = 3
+	GameState.extractions = 5
+	GameState.clock_ticks = 6
+	GameState.current_ring = 4
+	GameState.save_game()
+	GameState.run_count = 0
+	GameState.grief_reserve = GameState.MAX_GRIEF
+	GameState.extractions = 0
+	GameState.clock_ticks = 0
+	GameState.current_ring = 1
+	_ok("load_game() reads a written save", GameState.load_game())
+	_ok("run_count round-trips", GameState.run_count == 17)
+	_ok("grief_reserve round-trips", GameState.grief_reserve == 3)
+	_ok("extractions round-trips", GameState.extractions == 5)
+	_ok("clock_ticks round-trips", GameState.clock_ticks == 6)
+	_ok("current_ring round-trips", GameState.current_ring == 4)
+
+	# A stale or hand-edited file must not push the run loop out of range.
+	var cfg := ConfigFile.new()
+	cfg.set_value(GameState.SAVE_SECTION, "clock_ticks", 999)
+	cfg.set_value(GameState.SAVE_SECTION, "current_ring", 99)
+	cfg.set_value(GameState.SAVE_SECTION, "grief_reserve", -5)
+	cfg.save(GameState.SAVE_PATH)
+	GameState.load_game()
+	_ok("out-of-range clock clamps", GameState.clock_ticks == GameState.MAX_CLOCK)
+	_ok("out-of-range ring clamps", GameState.current_ring == GameState.HIGHEST_BUILT_RING)
+	_ok("negative reserve clamps", GameState.grief_reserve == 0)
+
+	GameState.persist_enabled = false
+	GameState.run_count = snapshot[0]
+	GameState.grief_reserve = snapshot[1]
+	GameState.extractions = snapshot[2]
+	GameState.clock_ticks = snapshot[3]
+	GameState.current_ring = snapshot[4]
+	if had_file:
+		var f := FileAccess.open(GameState.SAVE_PATH, FileAccess.WRITE)
+		if f != null:
+			f.store_buffer(backup)
+			f.close()
+	else:
+		DirAccess.remove_absolute(GameState.SAVE_PATH)
 
 
 # ── Enemy: receive_hit return values + hp ────────────────────────────────────

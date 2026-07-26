@@ -12,6 +12,11 @@ const ROT_SPEED := 90.0  # deg/sec free camera orbit (Q/E), pitch stays locked
 @onready var _grief_bar: HBoxContainer = $HUD/GriefBar
 @onready var _summon_label: Label = $HUD/SummonLabel
 @onready var _clock_label: Label = $HUD/ClockLabel
+@onready var _wait_prompt: Label = $HUD/WaitPrompt
+
+## The wait prompt's colours: available, and greyed when the trade is off the table.
+const WAIT_COLOR_READY := Color("#D4C4A8")
+const WAIT_COLOR_BLOCKED := Color("#5A4A6A")
 
 var _rig: IsoRig
 var _world: Node3D
@@ -35,6 +40,7 @@ func _ready() -> void:
 	_build_grief_bar()
 	_update_summon_label()
 	_update_clock()
+	_update_wait_prompt()
 
 
 func _process(delta: float) -> void:
@@ -74,9 +80,9 @@ func _update_summon_label() -> void:
 
 func _update_clock() -> void:
 	var ticks := GameState.clock_ticks
-	var filled := mini(ticks, 10)
+	var filled := mini(ticks, GameState.MAX_CLOCK)
 	var dot_str := ""
-	for i in range(10):
+	for i in range(GameState.MAX_CLOCK):
 		dot_str += "●" if i < filled else "○"
 	if GameState.is_last_song():
 		_clock_label.text = "ANTHE  " + dot_str + "  LAST SONG"
@@ -88,16 +94,33 @@ func _update_clock() -> void:
 		_clock_label.text = "ANTHE  " + dot_str
 		_clock_label.remove_theme_color_override("font_color")
 
+# Show whether the tick-for-reserve trade is available, and why not when it isn't — the
+# prompt used to advertise "[TAB] Wait" unconditionally even when the press did nothing
+# (or, at a capped clock, handed out reserve for free).
+func _update_wait_prompt() -> void:
+	var reason: String = GameState.wait_blocked_reason()
+	if reason.is_empty():
+		_wait_prompt.text = "[TAB] Wait  +%d GRIEF / +1 TICK" % GameState.GRIEF_GAIN_ON_WAIT
+		_wait_prompt.add_theme_color_override("font_color", WAIT_COLOR_READY)
+	else:
+		_wait_prompt.text = "[TAB] Wait  " + reason
+		_wait_prompt.add_theme_color_override("font_color", WAIT_COLOR_BLOCKED)
+
+
+# The reserve recovers, but the world moves on: waiting spends a tick of Anthe's Clock.
+# GameState.wait() owns the trade (and refuses it when the clock can't advance), so a
+# refused press must not repaint as if something happened.
 func _do_wait() -> void:
-	GameState.grief_reserve = min(GameState.grief_reserve + 2, GameState.MAX_GRIEF)
-	GameState.advance_clock()
+	if not GameState.wait():
+		_update_wait_prompt()
+		return
 	_refresh_grief_bar()
 	_update_summon_label()
 	_update_clock()
+	_update_wait_prompt()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("interact"):
 		get_tree().change_scene_to_file("res://scenes/main.tscn")
-	elif event is InputEventKey and event.pressed and not event.echo \
-			and event.physical_keycode == KEY_TAB:
+	elif event.is_action_pressed("wait"):
 		_do_wait()

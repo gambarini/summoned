@@ -73,6 +73,10 @@ func _ready() -> void:
 	# from it, so every summon explores a fresh layout (GameState.lock_seed pins it).
 	GameState.roll_run_seed()
 
+	# Charge the summoning before anything reads the tribe's state: an exhausted grief
+	# reserve pays for the ceremony out of Anthe (an extra clock tick) instead of failing.
+	GameState.begin_summon()
+
 	# --- Walls: rebuild the boundary box from the shared SimSpace bounds, so the
 	# arena size is the single PLAY_SCALE knob (the .tscn's legacy 480x270 box is
 	# replaced at runtime). Symmetric about SIM_ORIGIN, so the warrior start + all
@@ -192,25 +196,24 @@ func _process(delta: float) -> void:
 	_tick_extraction_gate(delta)
 
 
+# This scene owns the run's *flow* (the race guard + the scene change); the economy —
+# clock tick, grief, ring, tallies, save — lives in GameState.end_run_* so the whole
+# cost model reads from one file.
 func _end_run() -> void:
 	_run_ended = true
-	GameState.advance_clock()
 
 func _on_warrior_died() -> void:
 	if _run_ended:
 		return  # the run already resolved (extract/death race) — count it once
 	_end_run()
-	GameState.run_count += 1
-	GameState.grief_reserve = max(GameState.grief_reserve - 1, 0)
-	GameState.reset_ring()  # placeholder progression: death ends the run (back to Ring 1)
+	GameState.end_run_death()
 	get_tree().change_scene_to_file("res://scenes/base.tscn")
 
 func _on_warrior_extracted() -> void:
 	if _run_ended:
 		return  # the run already resolved (extract/death race) — count it once
 	_end_run()
-	GameState.extractions += 1
-	GameState.advance_ring()  # placeholder progression: extraction pushes one ring deeper
+	GameState.end_run_extract()
 	get_tree().change_scene_to_file("res://scenes/base.tscn")
 
 func _on_enemy_died() -> void:

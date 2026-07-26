@@ -15,6 +15,8 @@ func _ready() -> void:
 			ring = int(a.split("=")[1])
 		elif a == "--noreveal":
 			reveal_freq = false
+	# Dev harness: never write the player's save (this scene forces GameState fields).
+	GameState.persist_enabled = false
 	GameState.current_ring = ring
 
 	var main: Node = load("res://scenes/main.tscn").instantiate()

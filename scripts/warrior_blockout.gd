@@ -34,6 +34,8 @@ func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--ring="):
 			ring = int(a.split("=")[1])
+	# Dev harness: never write the player's save (this scene forces GameState fields).
+	GameState.persist_enabled = false
 	GameState.current_ring = ring
 
 	# --- Real pipeline mount (mirrors main._ready) ---------------------------

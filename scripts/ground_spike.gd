@@ -90,6 +90,8 @@ func _ready() -> void:
 	_rig.add_world_child(world)
 
 	if SHOW_WARRIOR:
+		# Dev harness: never write the player's save (this scene forces GameState fields).
+		GameState.persist_enabled = false
 		GameState.current_ring = 1  # WarriorMesh reads ring for tint/coherence
 		_add_warrior(_panels[2])  # panel C: flat + macro + decals
 		_rig.cam_size = 11.0       # closer so the warrior + ground both read
