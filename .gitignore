@@ -12,3 +12,8 @@ __pycache__/
 # GodotIQ local config — contains license key + bridge token, never commit
 .mcp.json
 .godotiq/
+
+# GodotIQ addon + its docs — commercial third-party product, not ours to redistribute.
+# Kept locally (and required for the MCP bridge); excluded from this public repo.
+addons/godotiq/
+GODOTIQ_RULES.md
