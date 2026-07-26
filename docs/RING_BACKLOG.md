@@ -1,5 +1,15 @@
 # Ring Scenario Backlog
 
+> **⚠ Status marks in this file are superseded (2026-07-26).** The live roadmap — priorities,
+> status, dependencies, per-item specs — is **[SUMMONED — Roadmap HQ](https://app.notion.com/p/3a92711a768d81a986c0d95d4a6f6cdb)**
+> in Notion. Every item below is represented there, split to one-session scope:
+> F1/F2/F3 + R1a/R1b/R1c are done (as marked); R1d→19, R1e→20, C1→12, C2→13+14,
+> C3→15–18, and P3's rings/factions/lore/endgame→22–37.
+>
+> **This file stays valuable as design reference** — the GDD-vs-built gap analysis, each
+> creature's intended *teach*, and the avoidance-first rationale. Read it for **why**;
+> take **what to do next** from Notion.
+
 Turns the GDD-vs-built gap (rings are terrain+palette only; combat = 3 generic enemies
 scattered in a box) into a prioritized build plan. Ordered to **prove the avoidance-first
 combat design in one ring before mass-producing creatures** — that design is the GDD's

@@ -68,16 +68,30 @@ Character references: `docs/[CHARACTER].md` — see Character Docs below.
 
 ## Current Priority
 
+> **📋 The roadmap lives in Notion, not in this file.**
+> **[SUMMONED — Roadmap HQ](https://app.notion.com/p/3a92711a768d81a986c0d95d4a6f6cdb)** is the single source of truth for *what to build next*: a `Roadmap` database of 42 items with Phase / Priority / Status / Size / dependencies, plus a `Session Log`. Each item is scoped to **one session = one commit** and carries its own Spec / Hook points / Done when.
+>
+> **At session start:** read the Roadmap HQ page (it holds the working conventions, the verification recipe and the commit protocol), take the lowest-numbered `todo` item whose dependencies are `done`, and set it to `wip` before writing code. Close out by setting `done`, filling `Commit hash`, and adding a Session Log entry.
+>
+> `docs/RING_BACKLOG.md` remains useful **design** reference (the GDD-vs-built analysis) but its status marks are superseded by Notion. `docs/HANDOFF.md` stays as engineering notes / session history.
+> The sections below are kept as **context**, not as the work queue.
+
 Make runs **matter and vary** — the loop and per-run map randomization are done; the gap is now purpose and generator quality.
 
 **Done:**
 - **Run loop is closed** (`main.gd`): death → `grief_reserve − 1` → `base.tscn`; extract → `current_ring + 1` → `base.tscn`; `clock_ticks` advances each run-end. Verified end-to-end.
 - **Maps are per-run randomized** (2026-06-30): every ring world + enemy layout derives RNG from `GameState.ring_seed(local)`, offset by a per-summon `GameState.run_seed` rolled in `main.gd._ready()`. `run_seed == 0` (and `GameState.lock_seed = true`) reproduces the original pinned layouts byte-for-byte for the look reference / tests. Previously every run was seed-pinned identical.
+- **Progression is spatial** (F3 + R1c): one extraction gate per run, placed by `main.gd._setup_extraction_gate()` (ring override via `extraction_point()`; Ring 1's is an authored far arch). `[F]` only fires inside `GATE_ACTIVATION_RADIUS`. Reach-only — it gives progression a *place*, not a payoff.
+- **Meta-economy is a real economy + it persists** (2026-07-26): `game_state.gd` now owns the whole cost model (`begin_summon` / `end_run_death` / `end_run_extract` / `wait`), and saves to `user://summoned_save.cfg` at those call sites — previously nothing was written to disk at all, so grief/clock/ring reset on every quit. Rebuilt against the GDD rather than the old placeholder reading (see below).
 
 **Next (the real roguelike work):**
-1. **Give the map a progression hook** — clearing/objective/exit should drive progression. Today `_on_run_cleared()` (`main.gd`) only shows a banner; the only way deeper is manually pressing `[E]` to extract, so combat has no payoff loop.
+1. **Give combat a payoff** — `_on_run_cleared()` (`main.gd`) still only shows a banner, and creatures (Threshold / Pale Herd) are off the `_enemies_alive` count so it can fire while a dozen are alive. The gate gives progression a place to reach; nothing yet rewards fighting. Cheapest real fix: pay cleared pockets / correct Resonance reads into the grief reserve, which is now a live currency.
 2. **Structure over scatter** — the generator only scatters props + enemy pockets in an open box (no chokepoints, cover, landmarks, objectives), so different seeds look different but play the same. Make the space create decisions.
-3. **Fix the meta-economy** — `grief_reserve` only ever drains (−1 per death, never replenished), a one-way death spiral; and `clock_ticks` reaching 10 ("LAST SONG") has no terminal outcome. Define a grief source and a clock-10 resolution (win/lose).
+3. **Tribe roster → the GDD's real triggers** — the economy below is complete as a *cost model*, but two GDD rules still can't be expressed without a tribe roster (members, ages, Anthe's capacity as its own axis):
+   - LAST SONG's real trigger is the tribe falling below its floor (Anthe lost, no surviving adult), not the clock cap. `GameState.is_last_song()` is the seam.
+   - Ring access should key off **tribe phase**, not extraction count — GDD: "The warrior does not earn access. The tribe does." `advance_ring()` is the seam.
+
+> **Correction (2026-07-26) — the old priority #3 was wrong on both halves.** It read: *"`grief_reserve` only ever drains (−1 per death, never replenished) … define a grief source and a clock-10 resolution (win/lose)."* In fact (a) a grief source already existed — `base.gd._do_wait()`, `[TAB] Wait`, labelled in `base.tscn` — it was just uncosted at a capped clock, so it handed out free reserve forever; and (b) the GDD explicitly rules out a win/lose at the clock cap: the crossing "is not an ending — it is a transition", and Last Song is "the hardest recovery arc. **It is still a recovery arc.**" Grief zero likewise is a *summoning tier* that costs a heavy clock advance ("Anthe ages noticeably"), not a fail state. So the economy has **no terminal state by design**: a death spends a tick and nets −1 reserve, a clean extraction recovers reserve and buys its tick back ("every successful run buys her time"), waiting trades a tick for reserve, and an exhausted summon is paid out of Anthe. The clock is a **ratchet** — the refund never exceeds what the run actually spent, so at the cap an extraction refunds nothing and LAST SONG stands. Tuning constants are at the top of `game_state.gd`.
 
 ---
 
