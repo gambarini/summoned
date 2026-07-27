@@ -1,5 +1,5 @@
 <!-- GODOTIQ RULES START -->
-<!-- godotiq-rules-version: 0.5.13 -->
+<!-- godotiq-rules-version: 0.5.15 -->
 # GodotIQ — Core Rules
 
 You have GodotIQ MCP tools (`godotiq_*`). ALWAYS prefer them over raw file operations on Godot files.
@@ -43,6 +43,8 @@ You have GodotIQ MCP tools (`godotiq_*`). ALWAYS prefer them over raw file opera
 | `BLOCKED` (node_ops) | read the `validation` array, adjust position/scale |
 | `NO_SCENE` / `PARENT_NOT_FOUND` / `NO_NODES` (build_scene) | open a scene / fix or create the parent / pass exactly one mode with valid data |
 | Partial success (build_scene) | check `errors`, retry only the failed items |
+| explore timeout / 0 screenshots | game must be running: `run(action="play")`, retry; partial results are valid — check `areas_inspected` |
+| screenshot metadata but NO visible image | your client does not forward MCP images: retry with `delivery="legacy"` |
 
 ## Conventions
 
