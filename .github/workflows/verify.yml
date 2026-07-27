@@ -1,0 +1,55 @@
+name: verify
+
+# Runs the same gate as a local `./verify.sh` — compile every script, then the headless
+# test suite. Keep the logic in verify.sh, not here, so a green local run means a green
+# CI run and there is only one thing to keep correct.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes an in-flight run obsolete.
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Pin to the version the project is developed against (project.godot: 4.6).
+      # Bump deliberately — a silent engine upgrade is a silent behaviour change.
+      GODOT_VERSION: 4.6.2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot binary
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot-bin
+          key: godot-${{ env.GODOT_VERSION }}-linux-x86_64
+
+      - name: Download Godot ${{ env.GODOT_VERSION }}
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/godot-bin
+          url="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -fsSL -o /tmp/godot.zip "$url"
+          unzip -q /tmp/godot.zip -d ~/godot-bin
+          mv ~/godot-bin/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot-bin/godot
+          chmod +x ~/godot-bin/godot
+
+      - name: Report Godot version
+        run: ~/godot-bin/godot --version
+
+      # No .godot/ in the repo (it is gitignored), so every run is a cold import.
+      # verify.sh handles that itself; caching it would risk masking import breakage.
+      - name: Run verification gate
+        run: GODOT=~/godot-bin/godot ./verify.sh
