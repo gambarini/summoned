@@ -115,6 +115,13 @@ func get_state() -> StringName:
 func get_tell() -> Color:
 	return _tell_color()
 
+## Can this creature damage the warrior? Part of the "enemies" contract: the run's
+## clear-count (see clear_tracker.gd) counts only hostiles, so peaceful ring life is
+## never something the player has to kill. Defaults to true — a new creature that
+## forgets to answer is counted rather than silently excused from the count.
+func is_hostile() -> bool:
+	return true
+
 # ── State machine scaffold ───────────────────────────────────────────────────
 
 func _change_state(next: StringName) -> void:

@@ -22,6 +22,7 @@ func _ready() -> void:
 	_test_enemy_states()
 	_test_warrior_coherence()
 	_test_song()
+	_test_clear_count()
 	_test_input_map()
 	# _test_warrior_damage() is SKIPPED — see _print_skips().
 	_print_skips()
@@ -442,3 +443,67 @@ func _test_song() -> void:
 
 	e_h.queue_free()
 	w3.queue_free()
+
+
+# ── The clear-count: hostiles only ────────────────────────────────────────
+
+# The clear banner used to fire off a counter that only tracked _spawn_enemies(), so
+# Ring 1 announced itself clear with 3 Thresholds and a 7-strong herd still walking
+# around. clear_tracker.gd now asks each spawn is_hostile(). These specs pin BOTH sides
+# of the decision: a Threshold blocks the clear, a Pale Walker never does — alive or
+# dead. Registration is explicit (never a group scan): the suite runs synchronously in
+# _ready(), so every queue_free() above is still pending and the "enemies" group is
+# full of stale bodies from earlier specs.
+func _test_clear_count() -> void:
+	print("\n[Clear count: hostiles only]")
+	var tracker: RefCounted = load("res://scripts/clear_tracker.gd").new()
+	var fired: Array = [0]
+	tracker.cleared.connect(func() -> void: fired[0] += 1)
+
+	# Ring 1's real mix: a pocket husk, a hostile Threshold, a peaceful grazer.
+	var husk := _enemy(EnemyScript.Freq.HARMONIC)
+	var threshold: CharacterBody2D = load("res://scripts/creature_threshold.gd").new()
+	add_child(threshold)
+	var walker: CharacterBody2D = load("res://scripts/creature_pale_walker.gd").new()
+	add_child(walker)
+
+	_ok("husk is hostile", husk.is_hostile())
+	_ok("Threshold is hostile (it lunges for 2 Coherence)", threshold.is_hostile())
+	_ok("Pale Walker is not hostile (no aggressive state)", not walker.is_hostile())
+
+	_ok("husk joins the count", bool(tracker.register(husk)))
+	_ok("Threshold joins the count", bool(tracker.register(threshold)))
+	_ok("Pale Walker is turned away", not bool(tracker.register(walker)))
+	_ok("count is hostiles only", tracker.hostiles_alive() == 2)
+
+	# Killing a grazer must move nothing: the ring is not more cleared for it.
+	walker.receive_hit(EnemyScript.Freq.DISSONANT)
+	walker.receive_hit(EnemyScript.Freq.DISSONANT)
+	_ok("grazer dies from two correct hits", walker._dead)
+	_ok("killing a grazer leaves the count alone", tracker.hostiles_alive() == 2)
+	_ok("killing a grazer does not clear the ring", fired[0] == 0)
+
+	# One hostile down is not a clear.
+	husk.receive_hit(EnemyScript.Freq.DISSONANT)
+	husk.receive_hit(EnemyScript.Freq.DISSONANT)
+	_ok("a dead hostile drops the count", tracker.hostiles_alive() == 1)
+	_ok("banner stays silent while a Threshold lives", fired[0] == 0)
+
+	# The last hostile clears it — exactly once.
+	threshold.receive_hit(EnemyScript.Freq.HARMONIC)
+	threshold.receive_hit(EnemyScript.Freq.HARMONIC)
+	_ok("the last hostile empties the count", tracker.hostiles_alive() == 0)
+	_ok("cleared fires exactly once", fired[0] == 1)
+
+	# A ring holding nothing but peaceful life never announces itself clear: the signal
+	# fires on a decrement that reaches zero, not on a count that started there.
+	var quiet: RefCounted = load("res://scripts/clear_tracker.gd").new()
+	var quiet_fired: Array = [0]
+	quiet.cleared.connect(func() -> void: quiet_fired[0] += 1)
+	var lone: CharacterBody2D = load("res://scripts/creature_pale_walker.gd").new()
+	add_child(lone)
+	quiet.register(lone)
+	_ok("a herd-only ring counts zero hostiles", quiet.hostiles_alive() == 0)
+	lone.receive_hit(EnemyScript.Freq.DISSONANT)
+	lone.receive_hit(EnemyScript.Freq.DISSONANT)
+	_ok("a herd-only ring never fires the banner", quiet_fired[0] == 0)

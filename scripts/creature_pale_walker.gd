@@ -183,6 +183,12 @@ func _on_player_event(event: StringName) -> void:
 func _on_attacked(_attacker_freq: int) -> void:
 	_scatter_herd(global_position)
 
+## The Pale Herd never fights: no aggressive state, no damage path, and its worst
+## reaction to the warrior is to sprint away. It is what non-hostile feels like, so it
+## stays off the run's clear-count — a ring must not require killing a herd to clear.
+func is_hostile() -> bool:
+	return false
+
 func _tell_color() -> Color:
 	match _state:
 		UNEASY: return COL_UNEASY

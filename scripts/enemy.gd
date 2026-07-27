@@ -107,6 +107,11 @@ func reveal(duration: float) -> void:
 func get_state() -> StringName:
 	return [&"idle", &"chase", &"attack", &"dead"][_state]
 
+## Part of the "enemies" contract (mirrors creature.gd): every husk chases and hits the
+## warrior, so all of them count toward the run's clear-count.
+func is_hostile() -> bool:
+	return true
+
 func _on_detect_entered(body: Node2D) -> void:
 	if _pacified:
 		return

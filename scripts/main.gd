@@ -58,7 +58,10 @@ var _world: Node3D       # the current ring's terrain builder (RingNWorld)
 var _warrior_sync: WarriorSync
 var _world_sync: WorldSync
 
-var _enemies_alive := 0
+# Counts only what can actually hurt the warrior (clear_tracker.gd asks each spawn's
+# is_hostile()), so the clear banner cannot fire while a Threshold is still hunting —
+# and clearing a ring never means killing the peaceful Pale Herd.
+var _clear: RefCounted = null
 var _run_ended := false
 
 var _gate_pos: Vector2
@@ -129,6 +132,8 @@ func _ready() -> void:
 	$Warrior.warrior_extracted.connect(_on_warrior_extracted)
 	if GameState.is_last_song():
 		$HUD.show_status("LAST SONG", Color("#C4547A"))
+	_clear = load("res://scripts/clear_tracker.gd").new()
+	_clear.cleared.connect(_on_run_cleared)
 	_spawn_enemies()
 	_spawn_test_creatures()
 	_setup_extraction_gate()
@@ -216,13 +221,13 @@ func _on_warrior_extracted() -> void:
 	GameState.end_run_extract()
 	get_tree().change_scene_to_file("res://scenes/base.tscn")
 
-func _on_enemy_died() -> void:
-	_enemies_alive -= 1
-	if _enemies_alive == 0 and not _run_ended:
-		_on_run_cleared()
-
+# Fired by the tracker when the last hostile dies. The banner says HOSTILES rather than
+# AREA because that is all it asserts: the peaceful herd may still be grazing nearby,
+# and that is not something the player is asked to fix.
 func _on_run_cleared() -> void:
-	$HUD.show_status("AREA CLEAR", Color(0.753, 0.627, 0.941, 1))
+	if _run_ended:
+		return
+	$HUD.show_status("HOSTILES CLEARED", Color(0.753, 0.627, 0.941, 1))
 
 func _spawn_enemies() -> void:
 	var last_song := GameState.is_last_song()
@@ -249,17 +254,16 @@ func _spawn_enemies() -> void:
 			var e := scene.instantiate() as EnemyBase
 			add_child(e)
 			e.global_position = pos
-			e.enemy_died.connect(_on_enemy_died)
-			_enemies_alive += 1
+			_clear.register(e)
 			if last_song:
 				e.force_amplify()
 
 
 # F1 test harness: drop a few Thresholds into Ring 1 at fixed offsets near the summon
 # point so the new Creature state machine (Still→Assessing→Committed→Withdrawn + the
-# Resonance intervention window) can be watched directly. Kept OFF the random SPAWN_MIX
-# and the _enemies_alive clear-count on purpose — this validates the framework without
-# touching the verified run loop. Remove once Thresholds graduate to real spawning.
+# Resonance intervention window) can be watched directly. Kept OFF the random SPAWN_MIX,
+# but ON the clear-count: a Threshold lunges for 2 Coherence, so the ring is not clear
+# while one is alive. Remove once Thresholds graduate to real spawning (roadmap 4).
 func _spawn_test_creatures() -> void:
 	if GameState.current_ring != 1:
 		return
@@ -269,12 +273,14 @@ func _spawn_test_creatures() -> void:
 		t.name = "Threshold%d" % i
 		add_child(t)
 		t.global_position = SimSpace.SIM_ORIGIN + offsets[i]
+		_clear.register(t)
 	_spawn_test_herd()
 
 
 # R1a test harness: one Pale Herd grazing north-west of the summon point — far enough
 # out that the warrior walks INTO its detection web rather than spawning inside it.
-# Same rules as the Thresholds above: off SPAWN_MIX, off the clear-count. The herd
+# Off SPAWN_MIX like the Thresholds, but unlike them it stays off the clear-count —
+# every walker is registered and the tracker turns it away on is_hostile(). The herd
 # array is handed to every walker (self included) — it IS the collective: any member's
 # detection alerts all of them; regrouping counts mates from it.
 func _spawn_test_herd() -> void:
@@ -293,6 +299,7 @@ func _spawn_test_herd() -> void:
 			rng.randf_range(-HERD_SPREAD, HERD_SPREAD),
 			rng.randf_range(-HERD_SPREAD, HERD_SPREAD))
 		herd.append(w)
+		_clear.register(w)  # declined: a grazer is not something you must kill to clear
 	for w in herd:
 		w.set_herd(herd)
 
