@@ -4,7 +4,9 @@ extends Node2D
 ## 2D diorama — same hybrid pattern as `main.gd`: the scene owns an `IsoRig` and
 ## mounts a 3D terrain builder (`VillaWorld`) into it, with the 2D HUD on top. There
 ## is no roaming warrior here, so the rig's follow camera stays disabled (the villa
-## sits centred at the origin) and the player only orbits with Q/E.
+## sits centred at the origin) and the player only orbits with Q/E (`orbit_left` /
+## `orbit_right`). Venture Out is on Enter (`venture_out`), NOT E — E is an orbit key
+## here, and the old `interact` binding double-booked it into an instant scene change.
 
 const ROT_SPEED := 90.0  # deg/sec free camera orbit (Q/E), pitch stays locked
 
@@ -47,9 +49,9 @@ func _process(delta: float) -> void:
 	if not is_instance_valid(_rig):
 		return
 	var spin := 0.0
-	if Input.is_physical_key_pressed(KEY_E) or Input.is_physical_key_pressed(KEY_RIGHT):
+	if Input.is_action_pressed("orbit_right"):
 		spin += 1.0
-	if Input.is_physical_key_pressed(KEY_Q) or Input.is_physical_key_pressed(KEY_LEFT):
+	if Input.is_action_pressed("orbit_left"):
 		spin -= 1.0
 	if spin != 0.0:
 		_rig.orbit(spin * ROT_SPEED * delta)
@@ -120,7 +122,7 @@ func _do_wait() -> void:
 	_update_wait_prompt()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("interact"):
+	if event.is_action_pressed("venture_out"):
 		get_tree().change_scene_to_file("res://scenes/main.tscn")
 	elif event.is_action_pressed("wait"):
 		_do_wait()

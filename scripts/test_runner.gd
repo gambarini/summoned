@@ -22,6 +22,7 @@ func _ready() -> void:
 	_test_enemy_states()
 	_test_warrior_coherence()
 	_test_song()
+	_test_input_map()
 	# _test_warrior_damage() is SKIPPED — see _print_skips().
 	_print_skips()
 	print("\n%d passed  %d failed  %d skipped" % [_pass, _fail, _skip])
@@ -60,6 +61,45 @@ const EnemyFleerScene  := preload("res://scenes/enemy_fleer.tscn")
 const EnemyPhaserScene := preload("res://scenes/enemy_phaser.tscn")
 const EnemyFleerScript = preload("res://scripts/enemy_fleer.gd")
 const EnemyPhaserScript = preload("res://scripts/enemy_phaser.gd")
+
+
+# ── InputMap ─────────────────────────────────────────────────────────────────
+
+# The bindings live in `project.godot`, so these specs are the only thing that proves
+# they reached disk — an action created live in the editor works in a live test and is
+# missing headless. They also guard the bug that made this suite grow: `interact` was
+# bound to E while `base.gd` orbited on raw E, so pressing E to look changed scene.
+func _test_input_map() -> void:
+	print("\n[InputMap bindings]")
+
+	for action in ["orbit_left", "orbit_right", "venture_out"]:
+		_ok("action %s exists" % action, InputMap.has_action(action))
+
+	_ok("stale E-bound 'interact' action is gone", not InputMap.has_action("interact"))
+
+	# No verb the player can hold to orbit may share a key with a verb that fires once —
+	# that is exactly the double-booking this item fixed.
+	var orbit_keys := _physical_keys("orbit_left") + _physical_keys("orbit_right")
+	for action in ["venture_out", "wait", "dash", "song", "resonance", "extract"]:
+		if not InputMap.has_action(action):
+			continue
+		var clash := false
+		for k in _physical_keys(action):
+			if orbit_keys.has(k):
+				clash = true
+		_ok("%s shares no key with orbit" % action, not clash)
+
+	_ok("orbit_left is Q/Left",   _physical_keys("orbit_left").has(KEY_Q) and _physical_keys("orbit_left").has(KEY_LEFT))
+	_ok("orbit_right is E/Right", _physical_keys("orbit_right").has(KEY_E) and _physical_keys("orbit_right").has(KEY_RIGHT))
+	_ok("venture_out is Enter",   _physical_keys("venture_out").has(KEY_ENTER))
+
+func _physical_keys(action: String) -> Array:
+	var keys := []
+	for ev in InputMap.action_get_events(action):
+		var key_ev := ev as InputEventKey
+		if key_ev != null:
+			keys.append(key_ev.physical_keycode)
+	return keys
 
 
 # ── GameState ────────────────────────────────────────────────────────────────

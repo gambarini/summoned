@@ -177,9 +177,9 @@ func _make_ring_world(ring: int) -> Node3D:
 func _process(delta: float) -> void:
 	# Free camera orbit (the iso pitch stays locked inside the rig).
 	var spin := 0.0
-	if Input.is_physical_key_pressed(KEY_E) or Input.is_physical_key_pressed(KEY_RIGHT):
+	if Input.is_action_pressed("orbit_right"):
 		spin += 1.0
-	if Input.is_physical_key_pressed(KEY_Q) or Input.is_physical_key_pressed(KEY_LEFT):
+	if Input.is_action_pressed("orbit_left"):
 		spin -= 1.0
 	if spin != 0.0:
 		_rig.orbit(spin * ROT_SPEED * delta)
