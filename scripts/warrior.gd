@@ -41,9 +41,10 @@ const ATTACK_ACTIVE_TIME := 0.11    # strike/hitbox window (finisher x1.5)
 const ATTACK_RECOVERY_TIME := 0.30  # chain window (finisher x2)
 const ATTACK_COOLDOWN_TIME := 0.38  # min time between swing starts — the combo's beat
 
-# The summon grace. State.SUMMONING locks input (see _handle_input / _read_dir), so the
-# warrior cannot dodge, block or step during it — being damageable through a window he
-# cannot act in would lose runs to an animation. take_damage() therefore ignores hits
+# The summon grace. State.SUMMONING locks the warrior out: _unhandled_input early-returns
+# on it (so no attack, dash or Song) and _handle_movement zeroes velocity. He cannot dodge
+# or step during it — being damageable through a window he cannot act in would lose runs
+# to an animation. take_damage() therefore ignores hits
 # while SUMMONING, and this is the length of that invulnerability. It used to be an
 # unnamed side effect of $SummoningTimer's scene-authored wait_time; it is a deliberate
 # design decision, so it is named and script-owned like the attack cadence above.
