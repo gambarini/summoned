@@ -13,7 +13,6 @@ const EnemyScene       := preload("res://scenes/enemy.tscn")
 const EnemyFleerScene  := preload("res://scenes/enemy_fleer.tscn")
 const EnemyPhaserScene := preload("res://scenes/enemy_phaser.tscn")
 const EnemyBase        := preload("res://scripts/enemy.gd")
-const ThresholdScript  := preload("res://scripts/creature_threshold.gd")  # F1 test creature
 
 const ROT_SPEED := 90.0  # deg/sec free camera orbit (Q/E), pitch stays locked
 
@@ -135,7 +134,9 @@ func _ready() -> void:
 	_clear = load("res://scripts/clear_tracker.gd").new()
 	_clear.cleared.connect(_on_run_cleared)
 	_spawn_enemies()
-	_spawn_test_creatures()
+	# The ring's living population comes from the declarative per-ring table — adding a
+	# creature to any ring is an edit to creature_roster.gd, not to this scene.
+	CreatureRoster.spawn(self, GameState.current_ring, _clear, HOME_SAFE_RADIUS, SPAWN_MARGIN)
 	_setup_extraction_gate()
 
 
@@ -257,51 +258,6 @@ func _spawn_enemies() -> void:
 			_clear.register(e)
 			if last_song:
 				e.force_amplify()
-
-
-# F1 test harness: drop a few Thresholds into Ring 1 at fixed offsets near the summon
-# point so the new Creature state machine (Still→Assessing→Committed→Withdrawn + the
-# Resonance intervention window) can be watched directly. Kept OFF the random SPAWN_MIX,
-# but ON the clear-count: a Threshold lunges for 2 Coherence, so the ring is not clear
-# while one is alive. Remove once Thresholds graduate to real spawning (roadmap 4).
-func _spawn_test_creatures() -> void:
-	if GameState.current_ring != 1:
-		return
-	var offsets := [Vector2(0, -150), Vector2(-140, -50), Vector2(150, -40)]
-	for i in range(offsets.size()):
-		var t := ThresholdScript.new()
-		t.name = "Threshold%d" % i
-		add_child(t)
-		t.global_position = SimSpace.SIM_ORIGIN + offsets[i]
-		_clear.register(t)
-	_spawn_test_herd()
-
-
-# R1a test harness: one Pale Herd grazing north-west of the summon point — far enough
-# out that the warrior walks INTO its detection web rather than spawning inside it.
-# Off SPAWN_MIX like the Thresholds, but unlike them it stays off the clear-count —
-# every walker is registered and the tracker turns it away on is_hostile(). The herd
-# array is handed to every walker (self included) — it IS the collective: any member's
-# detection alerts all of them; regrouping counts mates from it.
-func _spawn_test_herd() -> void:
-	const HERD_SIZE := 7
-	const HERD_HOME := Vector2(-320, -240)  # px from SIM_ORIGIN
-	const HERD_SPREAD := 60.0
-	var walker_script: GDScript = load("res://scripts/creature_pale_walker.gd")
-	var rng := RandomNumberGenerator.new()
-	rng.seed = GameState.ring_seed(3000)
-	var herd: Array = []
-	for i in range(HERD_SIZE):
-		var w: CharacterBody2D = walker_script.new() as CharacterBody2D
-		w.name = "PaleWalker%d" % i
-		add_child(w)
-		w.global_position = SimSpace.SIM_ORIGIN + HERD_HOME + Vector2(
-			rng.randf_range(-HERD_SPREAD, HERD_SPREAD),
-			rng.randf_range(-HERD_SPREAD, HERD_SPREAD))
-		herd.append(w)
-		_clear.register(w)  # declined: a grazer is not something you must kill to clear
-	for w in herd:
-		w.set_herd(herd)
 
 
 # --- Extraction gate (F3) -----------------------------------------------------

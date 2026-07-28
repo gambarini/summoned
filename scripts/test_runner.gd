@@ -23,6 +23,7 @@ func _ready() -> void:
 	_test_warrior_coherence()
 	_test_song()
 	_test_clear_count()
+	_test_creature_roster()
 	_test_input_map()
 	# _test_warrior_damage() is SKIPPED — see _print_skips().
 	_print_skips()
@@ -70,6 +71,129 @@ const EnemyPhaserScript = preload("res://scripts/enemy_phaser.gd")
 # they reached disk — an action created live in the editor works in a live test and is
 # missing headless. They also guard the bug that made this suite grow: `interact` was
 # bound to E while `base.gd` orbited on raw E, so pressing E to look changed scene.
+# Roadmap 4: the per-ring creature roster that replaced main.gd's _spawn_test_* harness.
+# Spawns into a throwaway parent, so nothing here needs main.tscn or the 3D rig.
+func _test_creature_roster() -> void:
+	print("\n[Creature roster: per-ring table]")
+	const HOME_SAFE := 260.0  # mirrors main.gd's spawn hygiene
+	const MARGIN := 140.0
+	var Roster: GDScript = load("res://scripts/creature_roster.gd")
+	var saved_ring: int = GameState.current_ring
+	var saved_seed: int = GameState.run_seed
+	var saved_lock: bool = GameState.lock_seed
+
+	_ok("every rostered creature has a cel-mesh (no billboard fallback)",
+			Roster.mesh_gaps().is_empty())
+
+	# --- Ring 1 population comes through the table -----------------------------
+	GameState.run_seed = 12345
+	var bag: Node = _spawn_roster(Roster, 1, HOME_SAFE, MARGIN)
+	var thresholds: Array = _of_class(bag, &"CreatureThreshold")
+	var walkers: Array = _of_class(bag, &"CreaturePaleWalker")
+	_ok("Ring 1 spawns 3 Thresholds", thresholds.size() == 3)
+	_ok("Ring 1 spawns a 7-walker herd", walkers.size() == 7)
+
+	# --- Spawn hygiene: clear of the summon point, inside the inset box --------
+	var lo: Vector2 = SimSpace.box_min_px() + Vector2(MARGIN, MARGIN)
+	var hi: Vector2 = SimSpace.box_max_px() - Vector2(MARGIN, MARGIN)
+	var clear_of_home: bool = true
+	var in_box: bool = true
+	for c in bag.get_children():
+		var p: Vector2 = (c as Node2D).global_position
+		if p.distance_to(SimSpace.SIM_ORIGIN) < HOME_SAFE - 0.01:
+			clear_of_home = false
+		if p.x < lo.x or p.x > hi.x or p.y < lo.y or p.y > hi.y:
+			in_box = false
+	_ok("nothing spawns inside the home-safe radius", clear_of_home)
+	_ok("nothing spawns outside the margin-inset box", in_box)
+
+	# --- The herd is still a collective after roster spawning ------------------
+	var web_complete: bool = true
+	for w in walkers:
+		if w._mates.size() != 7 or not w._mates.has(w):
+			web_complete = false
+	_ok("every walker holds the whole herd, self included", web_complete)
+	var herd_centre: Vector2 = Vector2.ZERO
+	for w in walkers:
+		herd_centre += (w as Node2D).global_position
+	herd_centre /= walkers.size()
+	var grouped: bool = true
+	for w in walkers:
+		if (w as Node2D).global_position.distance_to(herd_centre) > 130.0:
+			grouped = false
+	_ok("the herd spawns as one group, not scattered", grouped)
+
+	# One member spotting the warrior pings the whole web (_alert_herd is the broadcast
+	# side; herd_alert is what each mate receives), so all 7 go Uneasy together.
+	walkers[0]._alert_herd(SimSpace.SIM_ORIGIN)
+	var all_uneasy: bool = true
+	for w in walkers:
+		if w.get_state() != CreaturePaleWalker.UNEASY:
+			all_uneasy = false
+	_ok("one member's alert makes all 7 uneasy", all_uneasy)
+
+	# One member struck -> all 7 fragment (a single hit does not kill: hp is 2).
+	walkers[3].receive_hit(EnemyScript.Freq.DISSONANT)
+	var all_scattered: bool = true
+	for w in walkers:
+		if w.get_state() != CreaturePaleWalker.SCATTERED:
+			all_scattered = false
+	_ok("a strike on one scatters all 7", all_scattered)
+
+	# --- Per-run layout: seeded, varied, and pinnable --------------------------
+	var layout_a: Array = _positions(bag)
+	GameState.run_seed = 12345
+	var bag2: Node = _spawn_roster(Roster, 1, HOME_SAFE, MARGIN)
+	_ok("the same run_seed reproduces the layout", _positions(bag2) == layout_a)
+	GameState.run_seed = 999
+	var bag3: Node = _spawn_roster(Roster, 1, HOME_SAFE, MARGIN)
+	_ok("a different run_seed moves the creatures", _positions(bag3) != layout_a)
+	GameState.lock_seed = true
+	GameState.roll_run_seed()
+	var bag4: Node = _spawn_roster(Roster, 1, HOME_SAFE, MARGIN)
+	GameState.roll_run_seed()
+	var bag5: Node = _spawn_roster(Roster, 1, HOME_SAFE, MARGIN)
+	_ok("lock_seed pins the layout across runs", _positions(bag4) == _positions(bag5))
+	GameState.lock_seed = false
+
+	# --- A ring gains creatures by editing the table, nothing else -------------
+	GameState.run_seed = 4242
+	var bag_r2: Node = _spawn_roster(Roster, 2, HOME_SAFE, MARGIN)
+	_ok("Ring 2's table entry spawns without touching main.gd",
+			_of_class(bag_r2, &"CreatureThreshold").size() == 2)
+	var bag_r5: Node = _spawn_roster(Roster, 5, HOME_SAFE, MARGIN)
+	_ok("a ring with no table entry spawns nothing", bag_r5.get_child_count() == 0)
+
+	for b in [bag, bag2, bag3, bag4, bag5, bag_r2, bag_r5]:
+		b.queue_free()
+	GameState.current_ring = saved_ring
+	GameState.run_seed = saved_seed
+	GameState.lock_seed = saved_lock
+
+
+func _spawn_roster(roster: GDScript, ring: int, home_safe: float, margin: float) -> Node:
+	var bag := Node.new()
+	add_child(bag)
+	roster.spawn(bag, ring, null, home_safe, margin)
+	return bag
+
+
+func _of_class(bag: Node, cls: StringName) -> Array:
+	var out: Array = []
+	for c in bag.get_children():
+		var s: Script = c.get_script()
+		if s != null and s.get_global_name() == cls:
+			out.append(c)
+	return out
+
+
+func _positions(bag: Node) -> Array:
+	var out: Array = []
+	for c in bag.get_children():
+		out.append((c as Node2D).global_position)
+	return out
+
+
 func _test_input_map() -> void:
 	print("\n[InputMap bindings]")
 

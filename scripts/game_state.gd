@@ -44,9 +44,11 @@ var clock_ticks: int = 0
 var current_ring: int = 1
 
 ## --- Per-run map seed (roguelike map variety) ---------------------------------
-## Each ring world + the enemy layout derives its RNG from `ring_seed(local)`, which
-## offsets a per-summon `run_seed` onto every layer's local constant. `run_seed == 0`
-## reproduces the original byte-for-byte pinned layouts (the look-reference baseline),
+## Each ring world, the enemy layout and the creature roster derive their RNG from
+## `ring_seed(local)`, which offsets a per-summon `run_seed` onto every layer's local
+## constant (terrain 5..59, enemy pockets 1001..1005, creatures 3000+). `run_seed == 0`
+## reproduces the original byte-for-byte pinned terrain/pocket layouts (the look-
+## reference baseline) — creatures are only deterministic, not pre-roster-identical,
 ## so the default — and any scene that never calls `roll_run_seed()` (spikes, tests) —
 ## stays unchanged. `main.gd` rolls a fresh seed at the start of each run.
 var run_seed: int = 0
