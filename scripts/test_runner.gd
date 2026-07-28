@@ -25,8 +25,7 @@ func _ready() -> void:
 	_test_clear_count()
 	_test_creature_roster()
 	_test_input_map()
-	# _test_warrior_damage() is SKIPPED — see _print_skips().
-	_print_skips()
+	_test_warrior_damage()
 	print("\n%d passed  %d failed  %d skipped" % [_pass, _fail, _skip])
 
 
@@ -39,13 +38,6 @@ func _ok(label: String, cond: bool) -> void:
 	else:
 		print("  FAIL  " + label)
 		_fail += 1
-
-# Warrior.take_damage is still skipped — a design gap, not a bug: the warrior boots
-# into State.SUMMONING (warrior.gd:227) so take_damage() early-returns, and lethal
-# hits emit warrior_died async via $DyingTimer, not synchronously as that spec asserts.
-func _print_skips() -> void:
-	print("\n[SKIPPED] Warrior.take_damage — summon-boot + async death (design gap)")
-	_skip += 1
 
 func _enemy(freq: EnemyScript.Freq) -> CharacterBody2D:
 	var e := EnemyScene.instantiate() as CharacterBody2D
@@ -465,35 +457,78 @@ func _test_warrior_coherence() -> void:
 	w.queue_free()
 
 
-# ── Warrior: take_damage guards ──────────────────────────────────────────────
+# ── Warrior: take_damage — the summon grace and the async death ──────────────
 
+# Roadmap 5. This spec carried a permanent skip for two reasons, both now settled as
+# design rather than bug:
+#   1. The warrior boots into State.SUMMONING and take_damage() early-returns. That is
+#      the deliberate summon grace — input is locked through the materialise animation,
+#      so the window is invulnerable. It is now named (warrior.gd SUMMON_INVULN_TIME)
+#      and asserted here instead of worked around.
+#   2. A lethal hit does NOT emit warrior_died synchronously: it enters State.DYING and
+#      arms $DyingTimer so the death plays out before main.gd swaps scenes.
+# The suite runs synchronously inside _ready() — awaiting real time would outlive the
+# harness's --quit-after — so state transitions are driven by emitting the very timeout
+# signals _ready() wired up. That asserts the wiring rather than bypassing it: cut the
+# DyingTimer connection and "DyingTimer.timeout emits warrior_died" fails.
 func _test_warrior_damage() -> void:
 	print("\n[Warrior.take_damage]")
 
 	var w := _warrior(10)
+	var summoning: Timer = w.get_node("SummoningTimer")
+	var hurt: Timer = w.get_node("HurtTimer")
+	var dying: Timer = w.get_node("DyingTimer")
 
+	# --- the summon grace ---------------------------------------------------
+	# No assert on summoning.wait_time: _ready() assigns it from SUMMON_INVULN_TIME, so
+	# comparing the two could never fail. What is worth pinning is the behaviour — the
+	# grace is armed at boot, ignores damage, and ends by dropping to IDLE.
+	_ok("boots into SUMMONING",           w._state == WarriorScript.State.SUMMONING)
+	_ok("the grace is armed at boot",     not summoning.is_stopped())
+	w.take_damage(3)
+	_ok("SUMMONING ignores damage",       w.coherence == 10)
+
+	summoning.stop()
+	summoning.timeout.emit()
+	_ok("summon timeout drops to IDLE",   w._state == WarriorScript.State.IDLE)
+
+	# --- a live warrior takes hits ------------------------------------------
 	w.take_damage(3)
 	_ok("damage reduces coherence",       w.coherence == 7)
+	_ok("non-lethal hit enters HURT",     w._state == WarriorScript.State.HURT)
+
+	w.take_damage(3)
+	_ok("HURT blocks further damage",     w.coherence == 7)
+	hurt.stop()
+	hurt.timeout.emit()
+	_ok("hurt timeout returns to IDLE",   w._state == WarriorScript.State.IDLE)
 
 	w.chain = 3
 	w.take_damage(1)
 	_ok("damage resets chain",            w.chain == 0)
+	_ok("coherence 7 → 6",                w.coherence == 6)
+	hurt.stop()
+	hurt.timeout.emit()
 
-	w.coherence = 5
-	w._inactive = true
-	w.take_damage(2)
-	_ok("inactive blocks damage",         w.coherence == 5)
-	w._inactive = false
-
-	var died := false
-	w.warrior_died.connect(func(): died = true)
+	# --- the lethal hit: state now, signal later ----------------------------
+	var died: Array = [0]
+	w.warrior_died.connect(func(): died[0] += 1)
 	w.coherence = 1
 	w.take_damage(1)
-	_ok("lethal hit emits warrior_died",  died)
 	_ok("coherence floored at 0",         w.coherence == 0)
+	_ok("lethal hit enters DYING",        w._state == WarriorScript.State.DYING)
+	_ok("warrior_died is NOT synchronous", died[0] == 0)
+	_ok("death arms DyingTimer",          not dying.is_stopped())
+	# DyingTimer's length stays scene-owned (warrior.tscn) — it is an animation duration,
+	# not a gameplay rule. Asserted against the literal on purpose: retuning the death
+	# beat must update this spec deliberately rather than slip through unnoticed.
+	_ok("DyingTimer holds the death beat (2.5s)", is_equal_approx(dying.wait_time, 2.5))
+	dying.stop()
+	dying.timeout.emit()
+	_ok("DyingTimer.timeout emits warrior_died", died[0] == 1)
 
 	w.take_damage(1)
-	_ok("coherence=0 blocks further damage", w.coherence == 0)
+	_ok("DYING blocks further damage",    w.coherence == 0 and died[0] == 1)
 
 	w.queue_free()
 
