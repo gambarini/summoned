@@ -229,9 +229,12 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 # --- Procedural pose API (driven by WarriorSync) -----------------------------
 
 ## Walk cycle: opposite-phase leg swings, scaled by `amount` (0 idle .. 1 moving).
-func set_walk(phase: float, amount: float) -> void:
+## `stride` widens the swing (and the knee flex with it) over the base LEG_SWING walk —
+## WarriorSync opens it up at the run so the feet keep up with the fast pace.
+func set_walk(phase: float, amount: float, stride := 1.0) -> void:
 	_last_walk_amt = amount
 	_last_walk_phase = phase
+	amount *= stride
 	var s := sin(phase) * LEG_SWING * amount
 	if _leg_l: _leg_l.rotation.x = s
 	if _leg_r: _leg_r.rotation.x = -s

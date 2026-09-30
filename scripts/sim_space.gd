@@ -9,8 +9,8 @@ class_name SimSpace
 ## and the mouse->world attack aim (which needs the inverse, `to_sim`).
 ##
 ## These constants are UNIVERSAL across all rings, not ring-specific (Phase 5
-## locked PPU=18). They must be: the warrior billboard's `pixel_size` and the 2D
-## sim's 100 px/s speed are fixed, so a per-ring PPU would change the warrior's
+## locked PPU=18). They must be: the warrior's world size and the 2D sim's speeds
+## (PACE below) are universal, so a per-ring PPU would change the warrior's
 ## on-screen size and movement feel between rings. Per-ring variation belongs in
 ## the *terrain* (each ring's geometry), not in this transform.
 ##
@@ -39,6 +39,17 @@ const SIM_ORIGIN := Vector2(240.0, 135.0)  # 2D play-area centre -> world origin
 ## (main.gd), enemy spawn spread (main.gd), and every ring's terrain extent read
 ## this through the helpers below -- never hardcode the box size in those files.
 const PLAY_SCALE := 4.0
+
+# --- Movement pace (the tempo knob) -----------------------------------------
+## Tempo multiplier on every character's TRAVEL speed — PLAY_SCALE is the space knob,
+## this is the time knob. Speeds are authored at PACE 1 (the original 100 px/s warrior
+## walk) and multiplied here: the warrior's SPEED, husk chase/flee, the Threshold's
+## commit/withdraw, the Pale Herd's gaits, and the mesh gait references that pace
+## their legs. Scaling them together keeps every designed relation intact (the herd's
+## scatter still outruns the warrior, the fleer still sits just below him). Deliberately
+## NOT scaled: the dash (its own burst, tuned in warrior.gd), hit knockback, attack
+## step/drift, and every duration and range. 1.7 = the fast-paced pass (roadmap 43).
+const PACE := 1.7
 ## Half-size of the ORIGINAL 480x270 box (its centre is SIM_ORIGIN).
 const _BASE_HALF_PX := Vector2(240.0, 135.0)
 

@@ -20,11 +20,11 @@ const COMMITTED := &"committed"
 const WITHDRAWN := &"withdrawn"
 
 const ASSESS_TIME := 1.6      # window length before the assessment completes → commit
-const COMMIT_SPEED := 165.0
+const COMMIT_SPEED := 165.0 * SimSpace.PACE   # travel speeds authored at PACE 1 (SimSpace.PACE)
 const COMMIT_TIME := 0.55     # lunge duration cap
 const COMMIT_DAMAGE := 2      # "significant Coherence damage" for a missed window
 const COMMIT_REACH := 11.0    # px to the warrior that counts as the lunge landing
-const WITHDRAW_SPEED := 80.0
+const WITHDRAW_SPEED := 80.0 * SimSpace.PACE
 const WITHDRAW_TIME := 2.2
 
 # Placeholder tells (recolour the octagon until the cel-mesh lands).

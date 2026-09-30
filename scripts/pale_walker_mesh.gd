@@ -47,9 +47,12 @@ const GALLOP_BODY_PITCH := 0.12  # nose-down body pitch at full sprint (rad)
 
 # Legs.
 const SWING_AMP := 0.55      # max leg swing (rad)
-const SWING_SPEED_REF := 80.0    # sim px/s at which the swing reaches full amplitude
+# Speed-referenced values scale with the herd's gaits (SimSpace.PACE). PHASE_RATE is per
+# px travelled, so the cadence already tracks the faster pace; the cap moves with it so
+# the scatter sprint keeps its stride instead of skating against the old ceiling.
+const SWING_SPEED_REF := 80.0 * SimSpace.PACE    # sim px/s at which the swing reaches full amplitude
 const PHASE_RATE := 0.10     # leg-phase rad per sim px travelled
-const PHASE_RATE_MAX := 14.0 # cap so the sprint doesn't strobe
+const PHASE_RATE_MAX := 14.0 * SimSpace.PACE # cap so the sprint doesn't strobe
 
 # Smoothing rates (per second). The scatter snap is fast — fragmentation is
 # instant; grazing eases like a slow animal deciding nothing is wrong.

@@ -1,18 +1,27 @@
 extends CharacterBody2D
 
-const SPEED := 100.0
-const ACCEL := 10.0   # lerp factor toward target speed — higher = snappier start
-const DECEL := 14.0   # lerp factor toward zero — slightly faster stop than start
-const RUN_MULTIPLIER := 1.8   # Left Shift held — sprint speed scale over walk SPEED
+# Locomotion (roadmap 43, the fast-paced pass). The base pace is authored at the original
+# 100 px/s walk and scaled by SimSpace.PACE — the one tempo knob — so every creature keeps
+# its designed speed relation to the warrior when it is retuned. Steering is constant-rate
+# (_steer, a move_toward), not the old exponential lerp: the lerp's long tail read as mush
+# (0.22s to reach speed, 0.28s to turn around). The *_TIME values are the time to cover
+# the whole 0 <-> SPEED range.
+const SPEED := 100.0 * SimSpace.PACE
+const ACCEL_TIME := 0.08      # rest -> full speed
+const STOP_TIME := 0.06       # full speed -> rest, on release
+const REVERSE_BOOST := 2.0    # accel x this while the input opposes the velocity (snap turnarounds)
+const RUN_MULTIPLIER := 1.3   # Left Shift held — sprint over the (already fast) base pace
 # Dash: a brief i-frame dodge. Flat burst (no lerp) along the dash direction, with
-# invulnerability while State.DASH and a cooldown before the next one. Sized for the
-# explore-scale arenas (PLAY_SCALE=4): ~123px per dash — a real reposition, not a blip.
+# invulnerability while State.DASH and a cooldown before the next one. ~136px per dash at
+# ~4x the base pace, so it still reads as a burst over the faster walk. It exits at move
+# speed (_tick_dash) — the old exit handed DASH_SPEED to the steering, which bled it out
+# as a ~26px ice-slide after every dash.
 # After DASH_ATTACK_CANCEL_AFTER of commit, a buffered attack may cancel the dash
 # directly (_try_attack) — the dash momentum carries into the swing's damped drift,
 # so dash-attack is a genuine lunge rather than dash, stop, swing.
-const DASH_SPEED := 560.0
-const DASH_DURATION := 0.22
-const DASH_COOLDOWN := 0.7
+const DASH_SPEED := 680.0
+const DASH_DURATION := 0.20
+const DASH_COOLDOWN := 0.5
 const DASH_ATTACK_CANCEL_AFTER := 0.10
 # Input buffer: attack/dash presses arm a short window instead of being dropped when
 # they land mid-swing, mid-dash, or during the attack cooldown. _tick_buffers fires
@@ -28,7 +37,8 @@ const COMBO_LEN := 4
 # itself fires a forward step along the aim as REAL sim velocity — so the hitbox,
 # the mesh, and move_and_slide's wall collision all travel together (replacing
 # the old visual-only LUNGE_PX offset in warrior_sync.gd).
-const ATTACK_DRIFT := 0.4         # fraction of walk SPEED still steerable mid-swing
+# Absolute, deliberately NOT a fraction of SPEED: the pace knob must not make swings skate.
+const ATTACK_DRIFT_SPEED := 50.0  # px/s still steerable mid-swing
 const ATTACK_DRIFT_DAMP := 9.0    # lerp factor toward the drift target
 const ATTACK_STEP_SPEED := 130.0  # forward-step impulse at strike start (px/s, damps out)
 const ATTACK_STEP_FINISHER := 1.6 # the thrust finisher drives further
@@ -318,20 +328,29 @@ func _handle_movement(delta: float) -> void:
 		State.DYING, State.SUMMONING, State.HURT:
 			velocity = Vector2.ZERO
 		State.ATTACK_STARTUP, State.ATTACK_ACTIVE, State.ATTACK_RECOVERY:
-			var drift: Vector2 = dir * (SPEED * ATTACK_DRIFT)
+			var drift: Vector2 = dir * ATTACK_DRIFT_SPEED
 			velocity = velocity.lerp(drift, ATTACK_DRIFT_DAMP * delta)
 		State.ECHO_ACTIVE:
-			var target := dir * (SPEED * 0.4)
-			velocity = velocity.lerp(target, ACCEL * delta)
+			velocity = _steer(dir * (SPEED * 0.4), delta)
 		State.DASH:
 			velocity = _dash_dir * DASH_SPEED
 		_:
+			var target := Vector2.ZERO
 			if dir.length() > 0.1:
-				var move_speed := SPEED * (RUN_MULTIPLIER if _run_held() else 1.0)
-				velocity = velocity.lerp(dir * move_speed, ACCEL * delta)
-			else:
-				velocity = velocity.lerp(Vector2.ZERO, DECEL * delta)
+				target = dir * SPEED * (RUN_MULTIPLIER if _run_held() else 1.0)
+			velocity = _steer(target, delta)
 	move_and_slide()
+
+# Constant-rate steering toward `target` (px/s): ACCEL_TIME to reach full speed, STOP_TIME
+# to brake to rest on release, and REVERSE_BOOST while the input opposes the current
+# velocity so a turnaround snaps instead of coasting through zero.
+func _steer(target: Vector2, delta: float) -> Vector2:
+	var rate: float = SPEED / ACCEL_TIME
+	if target == Vector2.ZERO:
+		rate = SPEED / STOP_TIME
+	elif velocity.dot(target) < 0.0:
+		rate *= REVERSE_BOOST
+	return velocity.move_toward(target, rate * delta)
 
 # Movement direction in sim space. The 3D iso layer (Phase 2) injects a
 # camera-relative provider so "up" stays away-from-camera as the camera orbits;
@@ -433,6 +452,9 @@ func _tick_dash(delta: float) -> void:
 	if _state == State.DASH:
 		_dash_time_left -= delta
 		if _dash_time_left <= 0.0:
+			# Exit at move speed along the dash: the burst ends crisp and the steering
+			# takes over from a normal run, instead of braking ~4x speed (the ice-slide).
+			velocity = velocity.limit_length(SPEED)
 			_change_state(State.IDLE)
 
 func _update_move_state() -> void:
@@ -917,7 +939,7 @@ func _try_attack() -> bool:
 	elif _state == State.DASH \
 			and DASH_DURATION - _dash_time_left >= DASH_ATTACK_CANCEL_AFTER:
 		# Dash-cancel: the dash has committed (i-frame blip still reads), so an attack
-		# may cut the rest short. The 560px/s dash velocity feeds straight into the
+		# may cut the rest short. The DASH_SPEED velocity feeds straight into the
 		# attack states' damped drift — a lunging strike, wall-honest via move_and_slide.
 		_combo_step = 0
 		_change_state(State.ATTACK_STARTUP)

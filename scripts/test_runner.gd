@@ -26,6 +26,7 @@ func _ready() -> void:
 	_test_creature_roster()
 	_test_input_map()
 	_test_warrior_damage()
+	_test_locomotion()
 	print("\n%d passed  %d failed  %d skipped" % [_pass, _fail, _skip])
 
 
@@ -666,3 +667,103 @@ func _test_clear_count() -> void:
 	lone.receive_hit(EnemyScript.Freq.DISSONANT)
 	lone.receive_hit(EnemyScript.Freq.DISSONANT)
 	_ok("a herd-only ring never fires the banner", quiet_fired[0] == 0)
+
+
+# ── Locomotion: the fast-paced pass ──────────────────────────────────────────────
+
+# Roadmap 43. Steps the warrior's _physics_process by hand at 60 Hz with an injected
+# input_provider and reads velocity only (the suite runs synchronously in _ready, before
+# any physics frame, so move_and_slide does not travel — distances integrate velocity).
+# The thresholds are the feel targets the pass was tuned to: a retune that loosens them
+# should update these deliberately. Before the pass: 0.22s to speed, 0.20s to stop,
+# 0.28s to reverse, and a ~26px ice-slide out of every dash.
+const _DT := 1.0 / 60.0
+
+func _test_locomotion() -> void:
+	print("\n[Locomotion]")
+	var speed: float = WarriorScript.SPEED
+
+	# --- the pace knob keeps every designed speed relation -----------------------------
+	_ok("warrior pace derives from SimSpace.PACE", is_equal_approx(speed, 100.0 * SimSpace.PACE))
+	_ok("herd scatter still outruns the warrior", CreaturePaleWalker.SCATTER_SPEED > speed)
+	_ok("Threshold lunge still outpaces the warrior", CreatureThreshold.COMMIT_SPEED > speed)
+	_ok("fleer still sits just below the warrior", EnemyFleerScript.FLEE_SPEED < speed \
+			and EnemyFleerScript.FLEE_SPEED > 0.8 * speed)
+	_ok("husk chase stays well below the warrior", EnemyScript.SPEED < 0.5 * speed)
+	_ok("the dash is a burst (>= 3.5x the pace)", WarriorScript.DASH_SPEED >= 3.5 * speed)
+
+	var dir: Array = [Vector2.ZERO]
+	var w := _live_warrior(dir)
+
+	# --- steering ------------------------------------------------------------------------
+	dir[0] = Vector2.RIGHT
+	var f := _frames_until(w, func() -> bool: return w.velocity.x >= 0.9 * speed)
+	_ok("reaches 90%% speed within 0.1s (%d frames)" % f, f > 0 and f * _DT <= 0.1)
+	_frames_until(w, func() -> bool: return false, 30)
+	_ok("holds exactly the base pace", is_equal_approx(w.velocity.x, speed))
+
+	dir[0] = Vector2.ZERO
+	var slide: Array = [0.0]
+	f = _frames_until(w, func() -> bool:
+		slide[0] += w.velocity.x * _DT
+		return w.velocity.length() < 1.0)
+	_ok("stops within 0.1s (%d frames)" % f, f > 0 and f * _DT <= 0.1)
+	_ok("stop slide under 8px (%.1f)" % slide[0], slide[0] < 8.0)
+
+	dir[0] = Vector2.RIGHT
+	_frames_until(w, func() -> bool: return false, 30)
+	dir[0] = Vector2.LEFT
+	f = _frames_until(w, func() -> bool: return w.velocity.x <= -0.9 * speed)
+	_ok("full reversal within 0.15s (%d frames)" % f, f > 0 and f * _DT <= 0.15)
+	w.queue_free()
+
+	# --- dash ------------------------------------------------------------------------------
+	w = _live_warrior(dir)
+	dir[0] = Vector2.RIGHT
+	_frames_until(w, func() -> bool: return false, 30)
+	w._start_dash()
+	var dash_dist: Array = [0.0]
+	_frames_until(w, func() -> bool:
+		dash_dist[0] += w.velocity.x * _DT
+		return w._state != WarriorScript.State.DASH)
+	_ok("dash covers 120-160px (%.0f)" % dash_dist[0], dash_dist[0] > 120.0 and dash_dist[0] < 160.0)
+	_ok("dash exits at move speed, not DASH_SPEED", w.velocity.length() <= speed + 0.01)
+	dir[0] = Vector2.ZERO
+	slide[0] = 0.0
+	_frames_until(w, func() -> bool:
+		slide[0] += w.velocity.x * _DT
+		return w.velocity.length() < 1.0)
+	_ok("no ice-slide after a dash (%.1fpx)" % slide[0], slide[0] < 8.0)
+	w.queue_free()
+
+	# The exit clamp must not eat the dash-attack lunge: an attack cancelling the dash
+	# keeps the burst's momentum into the swing.
+	w = _live_warrior(dir)
+	dir[0] = Vector2.RIGHT
+	w._start_dash()
+	w._attack_buffer = WarriorScript.INPUT_BUFFER
+	_frames_until(w, func() -> bool: return w._state != WarriorScript.State.DASH)
+	_ok("a buffered attack cancels the dash", w._state == WarriorScript.State.ATTACK_STARTUP)
+	_ok("dash-attack keeps its lunge momentum", w.velocity.length() > speed)
+	w.queue_free()
+
+
+# A warrior out of the summon grace, steered by `dir[0]` and aiming right.
+func _live_warrior(dir: Array) -> CharacterBody2D:
+	var w := _warrior(10)
+	w.input_provider = func() -> Vector2: return dir[0]
+	w.attack_dir_provider = func() -> Vector2: return Vector2.RIGHT
+	var summoning: Timer = w.get_node("SummoningTimer")
+	summoning.stop()
+	summoning.timeout.emit()
+	return w
+
+
+# Step `w` one 60 Hz physics tick at a time until `cond` holds; returns the frame count,
+# or -1 if `cap` frames pass first.
+func _frames_until(w: CharacterBody2D, cond: Callable, cap: int = 120) -> int:
+	for i in cap:
+		w._physics_process(_DT)
+		if cond.call():
+			return i + 1
+	return -1

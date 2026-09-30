@@ -19,9 +19,9 @@ func _init() -> void:
 	_rest_y = 0.52
 	_lean_max = 0.55
 	_hunch = -0.06        # tilted back — wary even standing still
-	_gait_freq = 13.0
+	_gait_freq = 13.0 * SimSpace.PACE   # scales with the flee speed (see enemy_mesh.gd)
 	_bob_amp = 0.05
-	_ref_speed = 90.0     # enemy_fleer.gd FLEE_SPEED
+	_ref_speed = EnemyFleer.FLEE_SPEED
 
 
 func _build_geometry(rig: IsoRig) -> void:

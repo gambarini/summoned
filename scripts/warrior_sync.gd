@@ -33,6 +33,7 @@ const BOB_AMPLITUDE := 0.1
 # shape, with px values rescaled to world units (÷PPU). World-space (local=false)
 # so the emitter leaves a debris trail as the warrior moves.
 const NOTATION_SHEET := preload("res://assets/sprites/notation_glyphs.png")
+const WarriorScript := preload("res://scripts/warrior.gd")
 const NOTATION_Y := FEET_Y + WarriorMesh.CHEST_Y   # chest socket, world height
 const _PX := 1.0 / SimSpace.PIXELS_PER_UNIT
 
@@ -83,6 +84,7 @@ var _bob_y := 0.0  # current hover offset; the Hollow node rides this too
 # Procedural animation state (drives the mesh's leg/sword/cape pivots).
 var _walk_phase := 0.0
 var _walk_amt := 0.0
+var _gait_n: float = 0.0   # body speed / the warrior's base SPEED (0 .. sprint ratio)
 var _atk := 0.0
 var _prev_combo_step := 0   # detect a combo step advance to restart the swing param
 var _hitstop := 0.0   # seconds of swing-freeze remaining after a landed hit (impact feel)
@@ -675,7 +677,14 @@ func _sync_position() -> void:
 
 # Procedural animation: walk cycle from velocity, sword swing from the attack states,
 # cape sway from both. No skeleton — these rotate the mesh's leg/arm/cape pivots.
-const WALK_FREQ := 9.0       # rad/s leg cadence at full speed
+# Gait (roadmap 43): cadence tracks the body's speed against the warrior's OWN base SPEED
+# (read from the sim — the old copied REF_SPEED 100 went stale the moment the pace knob
+# moved), up to the sprint ratio, and the stride opens up with speed so the feet keep up
+# with the fast pace instead of skating. The old 9 rad/s cadence clamped at 1.4x left
+# the legs visibly behind the body at a run.
+const WALK_FREQ := 13.0      # rad/s leg cadence at base SPEED (scales with speed up to the sprint)
+const WALK_STRIDE := 1.3     # leg swing x the mesh's LEG_SWING at base SPEED (1.0 = the old walk)
+const WALK_BLEND := 10.0     # 1/s gait fade in/out — ~0.1s, keeping pace with the 0.08s accel
 # Per-phase swing pacing: an exponential anticipation draw on startup, a fast drive
 # through the active hit, and a slow settle on recovery. One flat rate read as a weightless
 # constant-velocity sweep; splitting it is half the "weight" pass (the mesh's _ease_strike
@@ -694,7 +703,7 @@ const STRIKE_RATE := 12.0
 const RECOVER_RATE := 2.5
 const HITSTOP_DURATION := 0.07   # seconds the swing freezes at the contact pose on a landed hit
 const RELAX_RATE := 6.0      # guard-return settle speed (combo end -> idle guard), ~0.17s
-const REF_SPEED := 100.0     # warrior px/s at full move (paces the cadence)
+const REF_SPEED := WarriorScript.SPEED   # warrior px/s at full (unsprinted) move
 # Dash read: the figure pitches into the dash direction (rotation about the local X,
 # post-yaw, pivoting at the feet) so the burst reads as a committed lunge, not fast
 # sliding. The lean snaps in hard and settles out softer; the cape flares with it, and
@@ -706,8 +715,10 @@ const DASH_LEAN_OUT := 7.0    # settle-back rate (1/s)
 const DASH_CAPE_FLARE := 0.30
 # Subtle forward commitment while striding: the body pitches a few degrees into the walk
 # (same axis as the dash lean; they compose). Standing bolt upright while the legs cycled
-# read as a statue sliding on rails.
-const WALK_LEAN := 0.07
+# read as a statue sliding on rails. Scales with the gait (floored at GAIT_FLOOR so the
+# slow mid-swing drift keeps the old 0.07 lean): ~6° at the run, ~7° at the sprint.
+const WALK_LEAN := 0.10
+const GAIT_FLOOR := 0.7
 # Death/summon form arc. FORM_RATE traverses 0<->1 in ~2.2s so the collapse/assemble
 # completes just under the 2.5s Dying/Summoning timers (no pop when the timer fires).
 const FORM_RATE := 0.45
@@ -739,12 +750,14 @@ func _on_melee_hit() -> void:
 
 func _animate(delta: float) -> void:
 	var speed := _warrior.velocity.length()
+	_gait_n = clampf(speed / REF_SPEED, 0.0, WarriorScript.RUN_MULTIPLIER)
 	if speed > MOVE_EPSILON:
-		_walk_phase += delta * WALK_FREQ * clampf(speed / REF_SPEED, 0.0, 1.4)
-		_walk_amt = move_toward(_walk_amt, 1.0, delta * 6.0)
+		_walk_phase += delta * WALK_FREQ * _gait_n
+		_walk_amt = move_toward(_walk_amt, 1.0, delta * WALK_BLEND)
 	else:
-		_walk_amt = move_toward(_walk_amt, 0.0, delta * 6.0)
-	_mesh.set_walk(_walk_phase, _walk_amt)
+		_walk_amt = move_toward(_walk_amt, 0.0, delta * WALK_BLEND)
+	# Stride opens from the old walk swing (slow mid-swing drift) to WALK_STRIDE at the run.
+	_mesh.set_walk(_walk_phase, _walk_amt, lerpf(1.0, WALK_STRIDE, minf(_gait_n, 1.0)))
 
 	# Sword: windup back on startup, full strike on active, settle through recovery.
 	var s: String = _warrior.vfx_state()
@@ -824,10 +837,13 @@ func _animate(delta: float) -> void:
 	var dashing := s == "DASH"
 	_dash_lean = move_toward(_dash_lean, 1.0 if dashing else 0.0,
 			delta * (DASH_LEAN_IN if dashing else DASH_LEAN_OUT))
-	_mesh.rotation.x = DASH_LEAN * _dash_lean + WALK_LEAN * _walk_amt
+	var stride_k: float = maxf(_gait_n, GAIT_FLOOR)
+	_mesh.rotation.x = DASH_LEAN * _dash_lean + WALK_LEAN * _walk_amt * stride_k
 
-	# Cape trails when moving and flares on the strike lunge and the dash burst.
-	_mesh.set_cape(0.06 + _walk_amt * 0.30 + maxf(_atk, 0.0) * 0.22 + _dash_lean * DASH_CAPE_FLARE)
+	# Cape trails when moving (streaming further at the sprint) and flares on the strike
+	# lunge and the dash burst.
+	_mesh.set_cape(0.06 + _walk_amt * 0.30 * stride_k + maxf(_atk, 0.0) * 0.22 \
+			+ _dash_lean * DASH_CAPE_FLARE)
 	# Coherence tatter (per-frame so a mid-run tier change re-poses the cape, not just
 	# at summon) — composes with the sway above (that rotates the parent pivot).
 	_mesh.set_coherence(_coherence_raw())

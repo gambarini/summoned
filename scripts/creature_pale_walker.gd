@@ -25,11 +25,12 @@ const UNEASY := &"uneasy"
 const SCATTERED := &"scattered"
 
 # Movement (sim px/s). Long legs built for covering ground: the scatter sprint far
-# outruns the warrior's 100; grazing is a slow ambient drift.
-const GRAZE_SPEED := 26.0
-const UNEASY_SPEED := 58.0
-const SCATTER_SPEED := 175.0
-const REGROUP_SPEED := 46.0
+# outruns the warrior's walk (1.75x); grazing is a slow ambient drift. Authored at
+# PACE 1 (the 100 px/s walk) and scaled with the warrior by SimSpace.PACE.
+const GRAZE_SPEED := 26.0 * SimSpace.PACE
+const UNEASY_SPEED := 58.0 * SimSpace.PACE
+const SCATTER_SPEED := 175.0 * SimSpace.PACE
+const REGROUP_SPEED := 46.0 * SimSpace.PACE
 
 # Herd shape.
 const COHESION_DIST := 75.0    # farther than this from the herd centre -> drift back

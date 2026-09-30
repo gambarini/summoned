@@ -1,7 +1,7 @@
 extends "res://scripts/enemy.gd"
 class_name EnemyFleer
 
-const FLEE_SPEED := 90.0
+const FLEE_SPEED := 90.0 * SimSpace.PACE   # just under the warrior's walk (SimSpace.PACE)
 
 var _cornered_timer := 0.0
 

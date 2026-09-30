@@ -49,9 +49,11 @@ var _legs: Array[Node3D] = []
 var _rest_y: float = 0.36     # body pivot height at neutral
 var _lean_max: float = 0.30   # forward pitch at full chase speed (rad)
 var _hunch: float = 0.10      # resting forward pitch (rad)
-var _gait_freq: float = 9.0   # limb-swing phase rate at full speed (rad/s)
+# The gait pair scales with SimSpace.PACE together: a faster body cycles its limbs
+# proportionally faster, so the stride per step (and the foot-skate) stays as authored.
+var _gait_freq: float = 9.0 * SimSpace.PACE   # limb-swing phase rate at full speed (rad/s)
 var _bob_amp: float = 0.035   # gait bob amplitude at full speed
-var _ref_speed: float = 80.0  # sim px/s that reads as "full speed" (amplified chase)
+var _ref_speed: float = Enemy.SPEED * 2.0     # sim px/s that reads as "full speed" (amplified chase)
 
 # Smoothed pose channels.
 var _lean: float = 0.0

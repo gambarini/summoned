@@ -7,7 +7,7 @@ enum Freq { DISSONANT, HARMONIC }
 enum HitResult { CORRECT, WRONG }
 enum State { IDLE, CHASE, ATTACK, DEAD }
 
-const SPEED := 40.0
+const SPEED := 40.0 * SimSpace.PACE   # chase; authored at PACE 1 (see SimSpace.PACE)
 # Hit reaction: a CORRECT hit staggers the enemy (no chase/attack) and shoves it away
 # from the player, so the warrior's combo visibly interrupts instead of trading hits.
 const HITSTUN_DURATION := 0.22
