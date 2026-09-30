@@ -45,8 +45,8 @@ const _PX := 1.0 / SimSpace.PIXELS_PER_UNIT
 # warrior's sim facing: the wound is painted on the sprite, so it must follow the
 # sheet that's actually shown — which also makes it appear/vanish correctly as the
 # camera orbits. Param arrays re-authored from warrior.gd's `_HOLLOW_*`.
-# The Hollow now rides the chest as it collapses — its world height comes from
-# `_chest_world_y()` each frame rather than a fixed anchor (see death-collapse arc).
+# The Hollow is pinned to the mesh's chest socket (WarriorMesh.get_chest()), so it sits on
+# the breastplate and rides the torso's twist/lean and the death collapse.
 const HOLLOW_DISC_PX := 32         # gradient disc resolution, like the 2D sprite
 const HOLLOW_VOID_SCALE := 0.72    # dark recess — kept wider than the ember
 const HOLLOW_GLOW_SCALE := 0.34    # burning core — tight point sunk in the void
@@ -85,8 +85,10 @@ var _bob_y := 0.0  # current hover offset; the Hollow node rides this too
 var _walk_phase := 0.0
 var _walk_amt := 0.0
 var _gait_n: float = 0.0   # body speed / the warrior's base SPEED (0 .. sprint ratio)
-var _atk := 0.0
-var _prev_combo_step := 0   # detect a combo step advance to restart the swing param
+var _atk := 0.0      # strike progress, windup -> landing (0..1)
+var _coil := 0.0     # windup progress, swing start -> cocked pose (0..1)
+var _stance_k := 1.0 # idle bladed-stance weight (eases out while a swing owns the body)
+var _prev_combo_step := 0   # detect a combo step advance to start the next swing
 var _hitstop := 0.0   # seconds of swing-freeze remaining after a landed hit (impact feel)
 var _relax := 0.0     # guard-return progress (1 = combo-end pose, 0 = idle guard) — Phase C
 var _was_attacking := false   # edge-detect the combo end to start the guard return
@@ -100,7 +102,7 @@ var _form := 0.0
 var _form_eased := 0.0   # smoothstep(_form) — what the mesh/effects actually use
 var _form_sink := 0.0    # world-units the figure drops into the plateau as it collapses
 var _prev_vfx := ""
-var _prev_state_for_arc := ""   # edge-detect ATTACK_ACTIVE to spawn the slash once per strike
+var _prev_state_for_arc := ""   # edge-detect ATTACK_ACTIVE / DASH for their one-shot sfx
 var _notation: GPUParticles3D
 var _hollow: Node3D
 var _hollow_void: MeshInstance3D
@@ -222,6 +224,7 @@ func setup(rig: IsoRig, warrior: CharacterBody2D, ember_tint := EMBER_TINT_DEFAU
 	add_child(_sfx)
 
 	_setup_notation()  # the drifting-score-debris identity, as 3D particles
+	_setup_strike_vfx()  # the blade trail (the dissonance waves are made per arc)
 	_setup_hollow()    # the burning chest wound (gated on facing + stress)
 	_sync_position()  # place the mesh before the first frame
 	_sync_facing()    # orient + seed the camera-relative facing for the gate
@@ -288,67 +291,170 @@ func _make_ground_ring(radius: float, thickness: float, steps := 40) -> ArrayMes
 	return mesh
 
 
-# --- Dissonance slash (the arc emitted from the sword swing) --------------
-# The arc of dissonance now exits the blade, not the floor: a crescent ribbon
-# parented to the mesh's sword-tip socket, so it rides the swing as the arm follows
-# through. Additive dissonance purple (the notation/pull hue) so it snaps cleanly.
-# Shape varies per combo step so each beat reads distinctly — wide crescents for the
-# horizontal cuts, a focused arc for the overhead chop, and a narrow forward spike for the
-# thrust finisher. Collision is unchanged (the 2D AttackArc HitArea owns it).
-const SLASH_COLOR := Color(0.627, 0.502, 0.878)   # #a080e0
-const SLASH_DURATION := 0.22
+# --- Strike read: the dissonance wave + the blade trail ------------------
+# The hit is the 2D AttackArc's HitArea: a wedge that spawns just ahead of the warrior and
+# TRAVELS forward along the aim (attack_arc.gd). The old 3D slash was a crescent parented
+# to the sword tip, so it rode the blade into the follow-through and drew beside or behind
+# him while the real wedge flew out in front, undrawn — the player could not see where a
+# swing was going to land. Now two layers split the job:
+#   * the WAVE mirrors every live player AttackArc — its exact hit polygon, position,
+#     rotation and scale, every frame — as a lavender crescent at cut height. What is drawn
+#     bright is exactly what can hit; it dims the moment the arc's hit window closes.
+#   * the TRAIL is a short ribbon swept by the blade (tip -> mid-blade) through the strike,
+#     so the swing's path reads at ~30 px tall where the limb motion alone does not.
+# Enemy arcs stay WorldSync's; the warrior flags his own with `skip_world_mirror`.
+const SLASH_COLOR := Color(0.627, 0.502, 0.878)   # #a080e0 — the dissonance/notation hue
+const WAVE_Y := 0.9          # height above the feet the wave is drawn at (a body-height cut plane)
+const WAVE_INNER := 0.35     # band inner edge, as a fraction of the hit radius (a crescent, not a pie)
+const WAVE_ALPHA := 0.9
+const WAVE_INNER_ALPHA := 0.2    # the band fades toward its inner edge — a slash streak
+const WAVE_REVEAL := 0.06    # s the crescent takes to sweep open, in the swing's direction
+const WAVE_FADE := 0.08      # s to vanish once the arc's hit window has closed
+const TRAIL_LIFE := 0.06     # s a trail sample lives — a smear behind the tip, not a fan
+const TRAIL_COLOR := Color("cbd2d3")   # pale steel — the palette's lightest, distinct from the wave
+const TRAIL_ALPHA := 0.7
 
-func _spawn_slash(step: int) -> void:
-	var tip := _mesh.get_sword_tip()
-	if tip == null:
-		return
-	var mi := MeshInstance3D.new()
-	mi.mesh = _make_slash_mesh(step)
+var _waves := {}             # AttackArc (Node2D) -> wave record (see _make_wave)
+var _trail: MeshInstance3D
+var _trail_pts: Array = []   # [age, tip: Vector3, mid: Vector3], newest last
+
+
+func _setup_strike_vfx() -> void:
+	_trail = MeshInstance3D.new()
+	_trail.name = "BladeTrail"
+	_trail.material_override = _strike_material(BaseMaterial3D.BLEND_MODE_MIX)
+	_rig.add_world_child(_trail)
+
+
+func _strike_material(blend: int) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.blend_mode = blend
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.albedo_color = Color(SLASH_COLOR.r, SLASH_COLOR.g, SLASH_COLOR.b, 0.9)
-	mi.material_override = mat
-	tip.add_child(mi)
-	var t := mi.create_tween().set_parallel(true)
-	t.tween_property(mi, "scale", Vector3.ONE * 1.2, SLASH_DURATION).from(Vector3.ONE * 0.4)
-	t.tween_property(mat, "albedo_color:a", 0.0, SLASH_DURATION).from(0.9)
-	t.chain().tween_callback(mi.queue_free)
+	mat.vertex_color_use_as_albedo = true
+	# Vertex colours are authored as sRGB hex; read as linear they brighten, and the palette
+	# snap turned the lavender wave into the ground's own pale grey.
+	mat.vertex_color_is_srgb = true
+	return mat
 
 
-# Crescent ribbon in the tip's local XZ plane (the plane the blade tip sweeps), so it
-# fans out from the blade edge. Span/reach vary per swing to match the four directions.
-func _make_slash_mesh(step: int) -> ArrayMesh:
-	var span: float
-	var inner: float
-	var outer: float
-	match step:
-		1:  # right->top: a rising fan, medium spread
-			span = deg_to_rad(118.0); inner = 0.32; outer = 1.10
-		2:  # top->down overhead chop: narrower but longer reach
-			span = deg_to_rad(80.0); inner = 0.24; outer = 1.40
-		3:  # thrust finisher: a narrow forward spike (not a crescent) — the point driving out
-			span = deg_to_rad(40.0); inner = 0.20; outer = 1.55
-		_:  # 0 left->right horizontal slash
-			span = deg_to_rad(140.0); inner = 0.34; outer = 1.05
-	var steps := 18
+# Mirror the warrior's live AttackArcs as waves; free a wave with its arc.
+func _sync_waves(delta: float) -> void:
+	for arc in _waves.keys():
+		if not is_instance_valid(arc):
+			_waves[arc]["mi"].queue_free()
+			_waves.erase(arc)
+	for arc in get_tree().get_nodes_in_group("attack_arcs"):
+		if not arc.has_meta("skip_world_mirror"):
+			continue
+		if not _waves.has(arc):
+			_waves[arc] = _make_wave(arc)
+		_update_wave(arc, _waves[arc], delta)
+
+
+func _make_wave(arc: Node2D) -> Dictionary:
+	var mi := MeshInstance3D.new()
+	# Mix, not additive: on the pale rings an additive lavender saturated to white and
+	# snapped to the ground's own pale grey.
+	mi.material_override = _strike_material(BaseMaterial3D.BLEND_MODE_MIX)
+	_rig.add_world_child(mi)
+	# The hit polygon is the outer arc (STEPS+1 points, -half -> +half) then the inner arc
+	# reversed; the wave is drawn off its outer arc, so its reach IS the hit reach.
+	var shape := arc.get_node("HitArea/HitShape") as CollisionPolygon2D
+	var poly := shape.polygon
+	var outer := poly.slice(0, floori(poly.size() * 0.5))
+	# Reveal direction follows the swing: arc-local +angle is the warrior's off side, so the
+	# forehand (step 0: sword side -> off side) opens from the -half end, the backhand from
+	# the +half end, and the chop/thrust open from the centre out.
+	var step: int = _warrior.vfx_combo_step()
+	var mode := 0 if step == 0 else (1 if step == 1 else 2)
+	return {"mi": mi, "outer": outer, "mode": mode, "age": 0.0, "closed": -1.0}
+
+
+func _update_wave(arc: Node2D, w: Dictionary, delta: float) -> void:
+	w["age"] += delta
+	var area := arc.get_node("HitArea") as Area2D
+	if not area.monitoring and w["closed"] < 0.0:
+		w["closed"] = w["age"]
+	var a := WAVE_ALPHA
+	if w["closed"] >= 0.0:
+		a *= clampf(1.0 - (w["age"] - w["closed"]) / WAVE_FADE, 0.0, 1.0)
+	var mi: MeshInstance3D = w["mi"]
+	if a <= 0.0:
+		mi.visible = false
+		return
+	mi.visible = true
+	mi.position = SimSpace.to_world(arc.global_position, FEET_Y + WAVE_Y)
+	mi.rotation = Vector3(0.0, -arc.global_rotation, 0.0)
+	var sc := arc.global_scale
+	mi.scale = Vector3(sc.x, 1.0, sc.y)
+	mi.mesh = _wave_mesh(w["outer"], w["mode"], clampf(w["age"] / WAVE_REVEAL, 0.0, 1.0), a)
+
+
+# The crescent band in the arc's local frame (sim px -> world units), revealed up to `r`.
+func _wave_mesh(outer: PackedVector2Array, mode: int, r: float, a: float) -> ArrayMesh:
+	var n := outer.size() - 1
+	var lo := 0
+	var hi := n
+	match mode:
+		0: hi = int(ceil(n * r))                       # opens -half -> +half
+		1: lo = n - int(ceil(n * r))                   # opens +half -> -half
+		_:
+			var half := int(ceil(n * 0.5 * r))         # opens from the centre out
+			lo = floori(n * 0.5) - half
+			hi = floori(n * 0.5) + half
+	lo = clampi(lo, 0, n)
+	hi = clampi(hi, 0, n)
+	if hi - lo < 1:
+		return null
 	var verts := PackedVector3Array()
-	for i in range(steps + 1):
-		var a := lerpf(-span * 0.5, span * 0.5, float(i) / steps)
-		var dx := cos(a)
-		var dz := sin(a)
-		verts.append(Vector3(dx * inner, 0.0, dz * inner))
-		verts.append(Vector3(dx * outer, 0.0, dz * outer))
+	var cols := PackedColorArray()
+	var edge := Color(SLASH_COLOR, a)
+	var inner := Color(SLASH_COLOR, a * WAVE_INNER_ALPHA)
+	for i in range(lo, hi + 1):
+		var p := outer[i] / SimSpace.PIXELS_PER_UNIT
+		verts.append(Vector3(p.x, 0.0, p.y) * WAVE_INNER)
+		verts.append(Vector3(p.x, 0.0, p.y))
+		cols.append(inner)
+		cols.append(edge)
+	return _strip_mesh(verts, cols)
+
+
+# Sample the blade while the strike is live; age out old samples; rebuild the ribbon.
+func _update_trail(delta: float, s: String) -> void:
+	for p in _trail_pts:
+		p[0] += delta
+	while not _trail_pts.is_empty() and _trail_pts[0][0] > TRAIL_LIFE:
+		_trail_pts.pop_front()
+	if s == "ATTACK_ACTIVE" and _hitstop <= 0.0:
+		_trail_pts.append([0.0, _mesh.get_sword_tip().global_position,
+			_mesh.get_sword_mid().global_position])
+	if _trail_pts.size() < 2:
+		_trail.mesh = null
+		return
+	var verts := PackedVector3Array()
+	var cols := PackedColorArray()
+	for p in _trail_pts:
+		var a: float = TRAIL_ALPHA * (1.0 - p[0] / TRAIL_LIFE)
+		verts.append(p[2])
+		verts.append(p[1])
+		cols.append(Color(TRAIL_COLOR, a * 0.3))
+		cols.append(Color(TRAIL_COLOR, a))
+	_trail.mesh = _strip_mesh(verts, cols)
+
+
+# Triangles for a strip of (inner, outer) vertex pairs.
+func _strip_mesh(verts: PackedVector3Array, cols: PackedColorArray) -> ArrayMesh:
 	var indices := PackedInt32Array()
-	for i in range(steps):
+	for i in range(floori(verts.size() * 0.5) - 1):
 		var b := i * 2
 		indices.append(b); indices.append(b + 1); indices.append(b + 2)
 		indices.append(b + 1); indices.append(b + 3); indices.append(b + 2)
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_COLOR] = cols
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -542,7 +648,10 @@ func _disc_material(tex: Texture2D, blend: int, priority: int) -> StandardMateri
 func _update_hollow(delta: float) -> void:
 	if _hollow == null:
 		return
-	_hollow.position = SimSpace.to_world(_warrior.global_position, _chest_world_y())
+	# Pinned to the mesh's chest socket (on the breastplate, following the torso's twist,
+	# lean and collapse). At the old body-centre anchor the no-depth-test disc drew over his
+	# flank in profile, so a side-on warrior read as facing the camera.
+	_hollow.position = _mesh.get_chest().global_position
 	var s := clampi(_warrior.hollow_stress, 0, 3)
 	var f: float = HOLLOW_DIR_VIS.get(_facing, 1.0)
 	# The wound shrinks with the body as he collapses and is gone once he's a flat heap.
@@ -685,22 +794,16 @@ func _sync_position() -> void:
 const WALK_FREQ := 13.0      # rad/s leg cadence at base SPEED (scales with speed up to the sprint)
 const WALK_STRIDE := 1.3     # leg swing x the mesh's LEG_SWING at base SPEED (1.0 = the old walk)
 const WALK_BLEND := 10.0     # 1/s gait fade in/out — ~0.1s, keeping pace with the 0.08s accel
-# Per-phase swing pacing: an exponential anticipation draw on startup, a fast drive
-# through the active hit, and a slow settle on recovery. One flat rate read as a weightless
-# constant-velocity sweep; splitting it is half the "weight" pass (the mesh's _ease_strike
-# curve, peaking at ~62% of the arc, is the other half). STRIKE_RATE 12 plays the whip in
-# ~0.10s (≈ the 0.11s active window) — fast but *visible*; the old 26 finished the whole
-# arc in ~3 frames and read as a jerky pop. RECOVER_RATE is gentle because recovery now
-# HOLDS near the landing pose (see atk_target below) rather than pulling the blade back.
-# The windup is NOT a move_toward: any finite rate either arrives early and freezes (the
-# old rate-7 dead-hold — target hit in ~0.04s, then a static pose for the rest of the
-# 0.117s startup, reading as input lag) or reacts sluggishly to the press. The exponential
-# draw (see _animate) pulls hard on the press frame and keeps creeping deeper the whole
-# startup — the coil never stops moving until the strike releases it.
-const WINDUP_TARGET := -0.32  # coil depth; the mesh extrapolates t<0 behind the start pose
-const WINDUP_EASE := 14.0     # 1/s exponential draw — ~80% of the coil by startup's end
+# Per-phase swing pacing. STARTUP: an exponential draw into the windup — any finite
+# move_toward rate either arrives early and freezes (a dead hold that reads as input lag)
+# or reacts sluggishly to the press; the exponential pulls hard on the press frame and keeps
+# creeping deeper through the whole 0.16s startup (~90% of the coil by its end). ACTIVE:
+# STRIKE_RATE plays the whip in ~0.08s, inside the 0.11s active window — fast but visible,
+# shaped by the mesh's _ease_strike curve (fastest at ~62%, where the blade crosses the
+# aim). RECOVERY holds the landing (see _animate).
+const WINDUP_EASE := 14.0     # 1/s exponential draw into the windup pose
 const STRIKE_RATE := 12.0
-const RECOVER_RATE := 2.5
+const CAPE_STRIKE_FLARE := 0.10   # extra cape flare at full strike (was 0.22 — read as a slab)
 const HITSTOP_DURATION := 0.07   # seconds the swing freezes at the contact pose on a landed hit
 const RELAX_RATE := 6.0      # guard-return settle speed (combo end -> idle guard), ~0.17s
 const REF_SPEED := WarriorScript.SPEED   # warrior px/s at full (unsprinted) move
@@ -749,9 +852,14 @@ func _on_melee_hit() -> void:
 
 
 func _animate(delta: float) -> void:
+	var s: String = _warrior.vfx_state()
+	var attacking := s == "ATTACK_STARTUP" or s == "ATTACK_ACTIVE" or s == "ATTACK_RECOVERY"
 	var speed := _warrior.velocity.length()
 	_gait_n = clampf(speed / REF_SPEED, 0.0, WarriorScript.RUN_MULTIPLIER)
-	if speed > MOVE_EPSILON:
+	# No gait while a swing owns the legs: the strike's forward step (real sim velocity) and
+	# the steerable drift used to start the walk cycle mid-swing — legs scissoring and the
+	# cape streaming as if running under every cut. The swing's braced lunge carries the step.
+	if speed > MOVE_EPSILON and not attacking:
 		_walk_phase += delta * WALK_FREQ * _gait_n
 		_walk_amt = move_toward(_walk_amt, 1.0, delta * WALK_BLEND)
 	else:
@@ -759,74 +867,55 @@ func _animate(delta: float) -> void:
 	# Stride opens from the old walk swing (slow mid-swing drift) to WALK_STRIDE at the run.
 	_mesh.set_walk(_walk_phase, _walk_amt, lerpf(1.0, WALK_STRIDE, minf(_gait_n, 1.0)))
 
-	# Sword: windup back on startup, full strike on active, settle through recovery.
-	var s: String = _warrior.vfx_state()
-	# Spawn the dissonance slash off the blade tip the instant the strike lands; it
-	# parents to the tip socket, so it rides the swing as the arm follows through.
+	var cs: int = _warrior.vfx_combo_step()
 	if s == "ATTACK_ACTIVE" and _prev_state_for_arc != "ATTACK_ACTIVE":
-		_spawn_slash(_warrior.vfx_combo_step())
 		if _sfx:
-			_sfx.call("play_swing", _warrior.vfx_combo_step())
+			_sfx.call("play_swing", cs)
 	elif s == "DASH" and _prev_state_for_arc != "DASH":
 		if _sfx:
 			_sfx.call("play_dash")
 	_prev_state_for_arc = s
-	var attacking := s == "ATTACK_STARTUP" or s == "ATTACK_ACTIVE" or s == "ATTACK_RECOVERY"
-	# Guard-return relax (Phase C): when a combo ends, ease the figure from its EXACT final
-	# pose back to the idle guard instead of snapping. Snapshot once on the attack->idle edge;
-	# a new swing cancels any pending relax.
+	# A new swing starts on the attack edge (fresh from idle/move/dash) or when a chained
+	# press advances the combo step. The mesh snapshots the pose on screen as the swing's
+	# START, so it coils from exactly there — the guard, the previous landing, or a
+	# half-finished guard return — and nothing ever pops.
+	if attacking and (not _was_attacking or cs != _prev_combo_step):
+		_mesh.begin_swing()
+		_coil = 0.0
+		_atk = 0.0
+		_hitstop = 0.0
+		_relax = 0.0
+	_prev_combo_step = cs
+	# Guard return: when a combo ends, ease the figure from its EXACT final pose back to the
+	# idle guard instead of snapping.
 	if _was_attacking and not attacking:
 		_mesh.begin_guard_return()
 		_relax = 1.0
-		_atk = 0.0
-	if attacking:
-		_relax = 0.0
 	_was_attacking = attacking
-	var atk_target := 0.0
-	var rate := RECOVER_RATE
 	match s:
 		"ATTACK_STARTUP":
-			atk_target = WINDUP_TARGET
-		"ATTACK_ACTIVE":
-			atk_target = 1.0
-			rate = STRIKE_RATE
-		"ATTACK_RECOVERY":
-			# Hold the follow-through: settle only slightly back from the landing (1.0),
-			# instead of the old pull-back to 0.35. This is what de-jerks the combo — a
-			# chained press zeroes _atk, and the new swing's w=0 pose IS the previous
-			# landing, so holding near 1.0 makes the handoff seam-free (the old pull-back
-			# made every chained press visibly snap the blade back to the landing first).
-			atk_target = 0.85
-			rate = RECOVER_RATE
-	# Restart the swing param when the combo step advances, so each new swing begins clean
-	# from its windup pose (snapping the prior arc to completion) rather than popping at a
-	# mid-swing value when the step flips during recovery — this is what gives the chained
-	# flourish its continuous cross-body flow. Gated to attacking states so the combo-end
-	# reset to step 0 doesn't snap _atk (the relax owns that transition).
-	var cs: int = _warrior.vfx_combo_step()
-	if cs != _prev_combo_step:
-		if attacking:
-			_atk = 0.0
-			_hitstop = 0.0
-		_prev_combo_step = cs
-	if _relax > 0.0 and not attacking:
-		# Settle from the captured combo-end pose to the live guard.
-		_relax = move_toward(_relax, 0.0, delta * RELAX_RATE)
-		_mesh.set_guard_return(_relax)
-	elif _hitstop > 0.0:
-		# Hitstop: hold the swing at the contact pose for a beat on a landed hit (set by
-		# _on_melee_hit) so the strike reads as force meeting resistance. Locomotion/cape
-		# still update — only the swing param freezes.
-		_hitstop -= delta
-		_mesh.set_attack(_atk, cs)
-	elif s == "ATTACK_STARTUP":
-		# Anticipation draw: exponential approach so the coil moves EVERY startup frame —
-		# a hard reactive pull on the press frame, decelerating but never static.
-		_atk = lerpf(_atk, atk_target, 1.0 - exp(-WINDUP_EASE * delta))
-		_mesh.set_attack(_atk, cs)
-	else:
-		_atk = move_toward(_atk, atk_target, delta * rate)
-		_mesh.set_attack(_atk, cs)
+			# Anticipation: an exponential draw into the windup — a hard reactive pull on the
+			# press frame that keeps creeping deeper, so the coil never sits static.
+			_coil = lerpf(_coil, 1.0, 1.0 - exp(-WINDUP_EASE * delta))
+			_mesh.set_attack(0.0, cs, _coil)
+		"ATTACK_ACTIVE", "ATTACK_RECOVERY":
+			if _hitstop > 0.0:
+				# Hitstop: hold the contact pose for a beat on a landed hit (set by
+				# _on_melee_hit) so the strike reads as force meeting resistance.
+				_hitstop -= delta
+			else:
+				# Drive the whip, then HOLD the landing through recovery: a chained swing
+				# snapshots that landing as its start, so the combo flows without resets.
+				_atk = move_toward(_atk, 1.0, delta * STRIKE_RATE)
+			_mesh.set_attack(_atk, cs, _coil)
+		_:
+			if _relax > 0.0:
+				_relax = move_toward(_relax, 0.0, delta * RELAX_RATE)
+				_mesh.set_guard_return(_relax)
+			else:
+				_mesh.set_guard()
+	_sync_waves(delta)
+	_update_trail(delta, s)
 
 	# Hurt: a snappy backward jolt (applied as a position recoil in _sync_position).
 	_recoil = move_toward(_recoil, 1.0 if s == "HURT" else 0.0, delta * 16.0)
@@ -840,13 +929,20 @@ func _animate(delta: float) -> void:
 	var stride_k: float = maxf(_gait_n, GAIT_FLOOR)
 	_mesh.rotation.x = DASH_LEAN * _dash_lean + WALK_LEAN * _walk_amt * stride_k
 
-	# Cape trails when moving (streaming further at the sprint) and flares on the strike
-	# lunge and the dash burst.
-	_mesh.set_cape(0.06 + _walk_amt * 0.30 * stride_k + maxf(_atk, 0.0) * 0.22 \
+	# Cape trails when moving (streaming further at the sprint) and flares a little on the
+	# strike and hard on the dash burst. The mesh cancels most of the torso lean, so this
+	# is the cape's angle off vertical, not off the (possibly deeply leaning) back.
+	var strike_k := clampf(_atk, 0.0, 1.0) if attacking else 0.0
+	_mesh.set_cape(0.06 + _walk_amt * 0.30 * stride_k + strike_k * CAPE_STRIKE_FLARE \
 			+ _dash_lean * DASH_CAPE_FLARE)
 	# Coherence tatter (per-frame so a mid-run tier change re-poses the cape, not just
 	# at summon) — composes with the sway above (that rotates the parent pivot).
 	_mesh.set_coherence(_coherence_raw())
+
+	# The idle bladed-stance turn fades out while a swing (or its guard return) owns the
+	# body, so strikes square up to the aim.
+	var guard_k := 0.0 if (attacking or _relax > 0.0) else 1.0
+	_stance_k = move_toward(_stance_k, guard_k, delta * STANCE_BLEND)
 
 	_animate_form(s, delta)
 
@@ -887,11 +983,13 @@ func _update_notation_emission(s: String) -> void:
 		_notation.emitting = true
 
 
-# Idle bladed-stance yaw: how far the WHOLE body turns side-on while standing. Positive
-# brings the warrior's LEFT side forward (toward his facing) and the sword/right side back
-# — the fencer's profile the stance asks for. Faded out as he moves or strikes so he squares
-# up to his facing to act; the Hollow gate still keys off `_face_dir`, not this visual yaw.
-const STANCE_YAW := 0.5
+# Idle bladed-stance yaw: how far the WHOLE body turns while standing. Positive draws the
+# sword side back and the off side forward. Kept small (it was 0.5 — with the torso twist
+# the chest sat ~47° off the facing and he read as facing the camera, not his heading);
+# faded out as he moves or strikes so he squares up to act. The Hollow gate keys off
+# `_face_dir`, not this visual yaw.
+const STANCE_YAW := 0.2
+const STANCE_BLEND := 6.0    # 1/s the stance turn fades in/out around a swing
 # How fast (rad-ease/s) the body pivots to face the aim on an attack: ~90% of the turn
 # in 0.15s — the whole windup reads as the body coiling onto the cursor. The old 30
 # converged in ~2 frames and read as a facing snap, not a turn.
@@ -917,7 +1015,7 @@ func _sync_facing(delta := 0.0) -> void:
 			_face_dir = adir.normalized()
 	# +Z is the mesh's front; rotate it onto (face_dir.x, face_dir.y) in world (x,z), then
 	# add the idle bladed-stance turn (full when standing, gone when moving/striking).
-	var blade := (1.0 - _walk_amt) * (1.0 - clampf(_atk, 0.0, 1.0))
+	var blade := (1.0 - _walk_amt) * _stance_k
 	var target_y := atan2(_face_dir.x, _face_dir.y) + STANCE_YAW * blade
 	# Ease the pivot into an attack so the body visibly turns to the cursor; snap otherwise
 	# (movement facing stays instant, as before).

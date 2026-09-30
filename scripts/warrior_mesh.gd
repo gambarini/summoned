@@ -28,13 +28,9 @@ const TOTAL_HEIGHT := 2.94   # helm crest top; ~matches the billboard's pixel_si
 # Animation throws (radians).
 const LEG_SWING := 0.5
 const KNEE_WALK := 0.55      # knee flex amplitude through the walk cycle (rad)
-const ARM_RAISE := 2.5       # sword from resting point-down to a forward strike (big reach)
-const SWING_YAW := 2.0       # horizontal slash sweep amplitude (rad) for the combo swings (wide)
 # Whole-body strike (the kinetic chain: hips/shoulders drive, the arm only leads). The
-# torso pivot coils on the windup (t<0) and whips through on the strike (t>0); legs brace.
-const TORSO_TWIST := 0.75    # rad (~43°) hip->shoulder rotation through a slash (wide whip)
-const TORSO_LEAN := 0.28     # rad (~16°) forward torso commit on the strike
-const WAIST_Y := 1.15        # where the lean folds — the belt line (see set_attack's pivot re-seat)
+# torso pivot coils on the windup and whips through on the strike; legs brace.
+const WAIST_Y := 1.15        # where the lean folds — the belt line (see _apply_pose's pivot re-seat)
 const STANCE := 1.5          # fore/aft leg brace as a fraction of LEG_SWING (deep lunge)
 const STANCE_WIDEN := 0.42   # rad (~24°) lateral foot splay — a wide planted power stance
 const BODY_SINK := 0.16      # how far the body drops into the cut (local units)
@@ -58,46 +54,65 @@ const TOE_OFF := 0.35           # trailing-leg toe-down per rad of hip-back angl
 const REAR_BLEND := 0.2         # rad of hip-back over which the ankle blends flat -> ball-of-foot
 const WALK_TWIST := 0.12        # shoulder counter-rotation against the hips at full walk
 
-# Per-step strike END waypoints — the pose the blade/body LANDS in at the peak (w=1) of
-# each swing. Each swing sweeps from the PREVIOUS step's landing (step 0 from the guard,
-# step N from STRIKE_ENDS[N-1]), so the blade flows across the body in a continuous combo:
-# [0] left->right cut, [1] rise to overhead, [2] overhead chop, [3] a committed lunging
-# THRUST that drives the point forward at the target (the finisher). The chain loops (a
-# 5th press re-cocks from the guard). Fields:
-#   arm_pitch, arm_yaw, arm_roll, torso_twist, torso_lean, sink, stance, widen, arm_extend.
-# arm_extend (local +Z, body-forward) is 0 for the cuts — only the thrust drives the grip out.
+# --- Swing keyframes ----------------------------------------------------------
+# Every pose is a flat array (the P_* field order below). Heading convention: the blade's
+# direction in the ground plane is ~(arm_yaw + torso_twist) off body-forward, positive
+# toward the sword side (local +X, where the grip hangs). The combo is authored so the
+# blade CROSSES THE AIM (heading 0) at peak swing speed and LANDS front-side — never
+# parked behind the body, which is what used to make a cut read as aimed somewhere else.
+#
+# Each swing is three keys: START (a snapshot of whatever pose the figure is in when the
+# swing begins — the guard, or the previous swing's landing), WINDUP (the cocked
+# anticipation pose, reached during ATTACK_STARTUP) and END (the landing, reached during
+# ATTACK_ACTIVE and held through recovery). Chained swings therefore flow into each other
+# with no reset: forehand cut -> backhand cut -> overhead chop -> lunging thrust.
+#
+# Fields: arm_pitch, arm_yaw, arm_roll, torso_twist, torso_lean, sink, stance, widen,
+# arm_extend, load. arm_pitch -PI/2 levels the blade forward (0 hangs it point-down,
+# below -PI/2 raises it). arm_extend drives the grip along body-forward. load 0..1 hands
+# the legs from the idle crouch (0) to the braced strike lunge (1).
+const P_STANCE := 6
+const P_WIDEN := 7
+const P_LOAD := 9
 const THRUST_EXTEND := 0.6   # how far the thrust drives the sword grip forward (local units)
+# Thrust lean: the arm rides the leaning torso, so the arm pitch subtracts the same angle
+# to keep the point level in WORLD space (driving at the target, not into the ground).
+const THRUST_LEAN := 0.22
+const SWING_WINDUPS := [
+	# 0 forehand: blade cocked out to the sword side, shoulders coiled back.
+	[-1.45,  1.15, 0.0,  0.60, -0.02,  0.06,  -0.5, 0.30,          -0.10, 0.35],
+	# 1 backhand: the forehand's follow-through winds on further across the body.
+	[-1.45, -1.20, 0.0, -0.65,  0.06,  0.08,  -0.6, 0.35,           0.0,  0.35],
+	# 2 overhead: blade raised up and back over the head, body rocked back onto the heel.
+	[-3.35, -0.30, 0.0,  0.18, -0.14, -0.04,  -0.3, 0.25,          -0.05, 0.25],
+	# 3 thrust: point toward the target, grip drawn back, sword shoulder coiled.
+	[-1.62, -0.25, 0.0,  0.55, -0.06,  0.04,  -0.45, 0.30,         -0.40, 0.35],
+]
 const STRIKE_ENDS := [
-	[-1.6, -1.9, 0.0, -0.78,  0.26, BODY_SINK,       -1.0, STANCE_WIDEN,       0.0],  # 0 horizontal slash (lands left)
-	[-2.9, -0.4, 0.0,  0.20, -0.06, -0.05,            0.4, STANCE_WIDEN * 0.6, 0.0],  # 1 rises to overhead
-	[ 0.20, 0.0, 0.0,  0.0,   TORSO_LEAN * 1.5, BODY_SINK * 1.5, -0.8, STANCE_WIDEN, 0.0],  # 2 overhead chop down
-	# 3 — lunging THRUST: hips square (no twist — drive straight in), deep forward lean +
-	# lunge, the point extends out. The arm pitch levels the blade in WORLD space: -PI/2
-	# alone levels it in the arm's local frame, but the arm rides the leaning torso, so
-	# without subtracting the lean the point stabbed ~27° into the ground — the extra
-	# -TORSO_LEAN*1.6 cancels the tip-down and the thrust drives straight at the target.
-	[-PI / 2 - TORSO_LEAN * 1.6,  0.0, 0.0,  0.0,   TORSO_LEAN * 1.6, BODY_SINK,        1.2, STANCE_WIDEN * 0.5, THRUST_EXTEND],  # 3 thrust finisher
+	# 0 forehand lands across on the off side, in front (heading ~ -1.2).
+	[-1.52, -0.70, 0.0, -0.50,  0.14,  BODY_SINK,  -0.9, STANCE_WIDEN,  0.10, 1.0],
+	# 1 backhand lands out on the sword side, stepping through (heading ~ +1.3).
+	[-1.55,  0.85, 0.0,  0.45,  0.12,  0.12,        0.7, 0.38,          0.10, 1.0],
+	# 2 chop: blade driven down the aim line, tip to the ground in front.
+	[-1.30, -0.25, 0.0,  0.0,   0.24,  0.22,       -1.0, STANCE_WIDEN,  0.15, 1.0],
+	# 3 thrust: hips square, lunge, the point drives out along the aim (finisher).
+	[-PI / 2 - THRUST_LEAN, -0.17, 0.0, -0.08, THRUST_LEAN, BODY_SINK, 1.0, STANCE_WIDEN * 0.5, THRUST_EXTEND, 1.0],
 ]
 
-# Combat-ready idle guard — the t=0 endpoint of set_attack(). Instead of standing limp
-# with the sword hanging point-down, the warrior holds a guard: blade raised toward the
-# threat, shoulders bladed, weight forward, feet planted. The tuned strike poses blend
-# OUT from this guard (lerp by the strike weight), so at full strike every channel still
-# lands on its original value — the attack is untouched, only the rest pose changed.
-# A bladed, orthodox fighting stance: body turned side-on (left shoulder + foot lead), the
-# sword cocked high-and-back over the right shoulder, gripped TWO-HANDED (both gauntlets on
-# the hilt). The WHOLE body turning side-on is done by WarriorSync.STANCE_YAW
-# (it yaws the entire mesh so legs + hips + torso blade together); this torso twist only
-# adds a small extra shoulder draw on top, kept low so the strike whip keeps its full range.
-# IDLE_STANCE is negative so the LEFT foot leads and the right trails.
-const IDLE_ARM_PITCH := -2.6   # sword cocked high (tip up/back over the right shoulder)
-const IDLE_ARM_YAW := -0.5     # angle the blade back to the right — wound up to strike
-const IDLE_TORSO_TWIST := 0.32 # shoulders blade MORE than the hips (chart: upper body turned, chest still toward the enemy)
-const IDLE_TORSO_LEAN := 0.10  # slight forward weight — alert, NOT hunched over
-const IDLE_STANCE := -0.7      # fore/aft stagger: left foot ahead, right foot driven back
-const IDLE_WIDEN := 0.18       # lateral foot splay — a planted, braced stance
-const IDLE_KNEE_LEAD := 0.48   # lead (front) knee bent — a contained crouch, not a deep squat
-const IDLE_KNEE_REAR := 0.22   # rear knee softer (that leg drives back, nearer straight)
+# Idle guard — squared up to the facing, blade held out in front and angled up, two hands
+# on the hilt. At ~30 px tall the blade pointing along the facing is the clearest read of
+# where the warrior is turned (the old side-on fencer's stance, sword cocked straight up
+# over the shoulder, left the chest ~47° off the facing and read as facing the camera).
+# IDLE_STANCE is negative so the off-side foot leads, a short natural stagger.
+const IDLE_ARM_PITCH := -2.0   # blade forward and ~24° up — tip at head height, ahead
+const IDLE_ARM_YAW := -0.45    # angle the tip in across the centerline
+const IDLE_TORSO_TWIST := 0.12 # a touch of blading — off shoulder slightly forward
+const IDLE_TORSO_LEAN := 0.06  # slight forward weight — alert, not hunched
+const IDLE_ARM_EXTEND := 0.15  # hands carried a little in front of the body
+const IDLE_STANCE := -0.35     # fore/aft stagger: off-side foot ahead
+const IDLE_WIDEN := 0.14       # lateral foot splay — planted, not straddled
+const IDLE_KNEE_LEAD := 0.40   # lead (front) knee bent — a contained crouch
+const IDLE_KNEE_REAR := 0.20   # rear knee softer (that leg drives back, nearer straight)
 
 # --- Palette (snaps to the active ring palette in the post pass) -------------
 const ARMOR_DARK := Color("241a33")   # deep indigo plate -> dark blue-grey
@@ -131,9 +146,13 @@ var _ankle_r: Node3D
 var _torso: Node3D     # upper-body pivot — the whole torso twists/leans into a strike
 var _arm: Node3D       # sword shoulder pivot (child of _torso)
 var _arm_base_pos: Vector3  # _arm's rest position — the thrust drives the grip forward from here
-var _relax_from := {}       # captured pose at combo end, for the guard-return settle (Phase C)
+var _cur_pose: Array = []   # the pose array applied last frame (what the figure is showing now)
+var _swing_from: Array = [] # START key of the current swing (snapshot at begin_swing)
+var _relax_from: Array = [] # snapshot at combo end, for the guard-return settle
 var _left_arm: Node3D  # off-hand guard arm (held forward as a blocking hand)
-var _sword_tip: Node3D # blade-tip socket (WarriorSync anchors the slash arc here)
+var _sword_tip: Node3D # blade-tip socket (WarriorSync's blade trail samples it)
+var _sword_mid: Node3D # outer-blade socket — the trail's inner edge
+var _chest: Node3D     # chest-socket anchor (the Hollow's world position)
 var _cape: Node3D
 var _cape_l: MeshInstance3D
 var _cape_r: MeshInstance3D
@@ -190,6 +209,11 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_box(Vector3(0.60, 0.74, 0.40), Vector3(0.0, 1.98, 0.0), armor, 0.0, 0.0, _torso)
 	_box(Vector3(0.34, 0.48, 0.10), Vector3(0.0, 2.04, 0.20), lit, 0.0, 0.0, _torso)
 	_disc_z(0.30, Vector3(0.0, CHEST_Y, CHEST_Z), _unshaded(VOID_COL), _torso)  # the socket
+	# Hollow anchor on the socket's face: rides the torso's twist/lean/sink and the form
+	# collapse, so WarriorSync's wound sits ON the chest rather than at the body centre.
+	_chest = Node3D.new()
+	_chest.position = Vector3(0.0, CHEST_Y, CHEST_Z)
+	_torso.add_child(_chest)
 	# Pauldrons (angled, prominent)
 	_box(Vector3(0.34, 0.30, 0.42), Vector3(-0.44, 2.22, 0.0), lit, -18.0, 0.0, _torso)
 	_box(Vector3(0.34, 0.30, 0.42), Vector3(0.44, 2.22, 0.0), lit, 18.0, 0.0, _torso)
@@ -218,6 +242,9 @@ func build(rig: IsoRig, hem_tint := EMBER_COL) -> void:
 	_sword_tip = Node3D.new()
 	_sword_tip.position = Vector3(0.0, -2.41, 0.0)
 	_arm.add_child(_sword_tip)
+	_sword_mid = Node3D.new()
+	_sword_mid.position = Vector3(0.0, -1.7, 0.0)   # outer third of the blade
+	_arm.add_child(_sword_mid)
 
 	# Off (left) forearm bridging back toward the body from the lower hand. Parented to the
 	# sword so it tracks the hilt through every swing (the grip always reads two-handed).
@@ -244,102 +271,99 @@ func set_walk(phase: float, amount: float, stride := 1.0) -> void:
 	if _knee_r: _knee_r.rotation.x = (0.5 - 0.5 * cos(phase + PI)) * KNEE_WALK * amount
 
 
-## Attack swing: `t` 0 (rest / combat guard) .. 1 (full strike); t < 0 is the startup
-## windup — the pose extrapolates BACK past the swing's start, coiling away along the same
-## swing line before the strike releases it. `step` picks the swing —
-## 0 left->right, 1 right->top, 2 top->down, 3 back-left — and each swing sweeps from the
-## PREVIOUS step's landing pose (step 0 from the guard) to this step's, so a chained combo
-## reads as one continuous flourish whipping across the body instead of four resets. The
-## cut is a kinetic chain: the torso (hips->shoulders) drives, the body leans/sinks, the
-## legs brace, and the arm only LEADS on top. (WarriorSync zeroes the swing param on each
-## step change so the new swing starts clean from its windup, completing the prior arc.)
-func set_attack(t: float, step := 0) -> void:
+## Idle guard: the resting pose between combos (and every walking frame). Composes over
+## this frame's set_walk(): the guard's leg stagger relaxes while moving so the gait stays
+## clean.
+func set_guard() -> void:
 	if _torso == null:
 		return
-	# w 0 = the swing's START pose (idle guard for step 0), 1 = its END (the landing).
-	var w := clampf(t, 0.0, 1.0)
-	# Weight curve: the pose progress is eased, not linear — a slow coil that whips through its
-	# fastest at ~STRIKE_PEAK, crests just past the landing (STRIKE_OVERSHOOT follow-through),
-	# then settles back to exactly 1.0. `we` exceeds 1.0 near the crest; the lerps extrapolate
-	# past the landing for the overshoot, then snap back. This is what gives the constant-rate
-	# swing its weight — a linear lerp reads weightless. Fed the UNCLAMPED t: negative t
-	# (the startup windup) maps to we < 0 and the lerps extrapolate BEHIND the start pose —
-	# the whole kinetic chain (arm, torso, stance) coils away along its own swing line.
-	# The leg-load/crouch weights below keep the clamped w, so the windup never flips them.
-	var we := _ease_strike(t)
+	_apply_pose(_guard_pose())
+
+
+## Start a new swing from EXACTLY the pose on screen now — the guard for a fresh attack,
+## the previous swing's landing for a chained one, or wherever a guard-return settle had
+## got to. WarriorSync calls this on every swing start, so no swing ever pops to a
+## hard-coded start pose.
+func begin_swing() -> void:
+	_swing_from = _cur_pose.duplicate() if not _cur_pose.is_empty() else _guard_pose()
+
+
+## Attack swing `step` (0 forehand, 1 backhand, 2 overhead chop, 3 thrust). `coil` 0..1
+## draws the figure from the swing's START (see begin_swing) into its WINDUP during
+## ATTACK_STARTUP; `t` 0..1 then drives the strike from wherever the coil got to into the
+## END landing, through the _ease_strike weight curve (slow release, fastest at ~62%, a
+## small overshoot, settle). The cut is a kinetic chain: the torso twist/lean drives, the
+## body sinks, the legs brace and load, and the arm only leads on top.
+func set_attack(t: float, step := 0, coil := 0.0) -> void:
+	if _torso == null:
+		return
+	var s := clampi(step, 0, STRIKE_ENDS.size() - 1)
+	var from: Array = _swing_from if not _swing_from.is_empty() else _guard_pose()
+	var cocked := _lerp_pose(from, SWING_WINDUPS[s], clampf(coil, 0.0, 1.0))
+	_apply_pose(_lerp_pose(cocked, STRIKE_ENDS[s], _ease_strike(t)))
+
+
+func _guard_pose() -> Array:
 	var leg_idle := 1.0 - _last_walk_amt
-	# Sweep from the previous swing's landing to this swing's — the heart of the cross-body flow.
-	var a := _swing_waypoint(step - 1, leg_idle)   # START (guard for step 0)
-	var b := _swing_waypoint(step, leg_idle)        # END (this swing's landing)
-	_arm.rotation.x = lerpf(a[0], b[0], we)
-	_arm.rotation.y = lerpf(a[1], b[1], we)
-	_arm.rotation.z = lerpf(a[2], b[2], we)
-	_torso.rotation.y = lerpf(a[3], b[3], we)
+	return [IDLE_ARM_PITCH, IDLE_ARM_YAW, 0.0, IDLE_TORSO_TWIST, IDLE_TORSO_LEAN, 0.0,
+		IDLE_STANCE * leg_idle, IDLE_WIDEN * leg_idle, IDLE_ARM_EXTEND, 0.0]
+
+
+# Per-field lerp of two pose arrays. `k` may exceed 1 (the strike overshoot extrapolates
+# past the landing and settles back).
+func _lerp_pose(a: Array, b: Array, k: float) -> Array:
+	var out := []
+	out.resize(a.size())
+	for i in a.size():
+		out[i] = lerpf(a[i], b[i], k)
+	return out
+
+
+# Write a pose array to the rig. Legs compose ON TOP of this frame's set_walk() (the stance
+# adds to the hip swing, the crouch/lunge add to the knee flex), then the grounding pass.
+func _apply_pose(p: Array) -> void:
+	_cur_pose = p
+	var leg_load := clampf(p[P_LOAD], 0.0, 1.0)
+	var leg_idle := 1.0 - _last_walk_amt
+	_arm.rotation = Vector3(p[0], p[1], p[2])
 	# Walking counter-rotation: the shoulders swing against the hips (left leg forward ->
-	# right shoulder forward), fading out as a strike takes ownership of the torso. This is
-	# the upper-body life a real gait has — without it the torso rode the legs like a crate.
-	_torso.rotation.y += -sin(_last_walk_phase) * WALK_TWIST * _last_walk_amt * (1.0 - w)
-	_torso.rotation.x = lerpf(a[4], b[4], we)
+	# right shoulder forward), fading out as a strike takes ownership of the torso.
+	_torso.rotation = Vector3(p[4],
+		p[3] - sin(_last_walk_phase) * WALK_TWIST * _last_walk_amt * (1.0 - leg_load), 0.0)
 	# Re-seat the lean's hinge at the WAIST. The pivot node stays at the origin (so the
-	# Y-twist keeps its pivot-height independence), but rotating there makes a forward
-	# lean fold at the FEET — at the chop/thrust finishers' deep leans the chest sheared
-	# ~0.9 units forward off the planted hips and the back read as snapped. Offsetting by
-	# h - R*h (h = belt point) moves the effective hinge to belt height: the hips stay
-	# seated on the legs and only the upper body folds forward. positive sink still
-	# drops the body into the cut on top.
+	# Y-twist keeps its pivot-height independence), but rotating there would fold a forward
+	# lean at the FEET and shear the chest off the planted hips. Offsetting by h - R*h
+	# (h = belt point) moves the effective hinge to belt height; `sink` drops on top.
 	var waist := Vector3(0.0, WAIST_Y, 0.0)
-	var pivot_fix := waist - _torso.basis * waist
-	_torso.position = pivot_fix + Vector3(0.0, lerpf(-a[5], -b[5], we), 0.0)
-	# Thrust extension: drive the sword grip forward along body-forward (local +Z). 0 for the
-	# cuts, so this is the rest position otherwise; only the finisher thrust drives it out.
-	_arm.position = _arm_base_pos + Vector3(0.0, 0.0, lerpf(a[8], b[8], we))
-	# Legs: the guard plants a persistent splay (relaxed while walking); the fore/aft lunge
-	# is strike-only. Both fold into the single _apply_stance call, sweeping with the swing.
-	var stance_val := lerpf(a[6], b[6], we)
-	_apply_stance(stance_val, lerpf(a[7], b[7], we))
-	# Load the legs into the split (scaled by the strike weight, so the authored idle-guard
-	# knees own the rest pose): the leading knee bends over its planted foot, the rear leg
-	# stays near-straight as the drive leg — a true lunge instead of two stiff stilts.
-	var lunge := absf(stance_val) * LEG_SWING * STANCE * w
-	if stance_val > 0.0:   # right leg leads (positive stance drives the left hip back)
+	_torso.position = waist - _torso.basis * waist + Vector3(0.0, -p[5], 0.0)
+	_arm.position = _arm_base_pos + Vector3(0.0, 0.0, p[8])
+	_apply_stance(p[P_STANCE], p[P_WIDEN])
+	# Load the legs into the split: the leading knee bends over its planted foot, the rear
+	# leg stays near-straight as the drive leg — a true lunge instead of two stiff stilts.
+	var lunge := absf(p[P_STANCE]) * LEG_SWING * STANCE * leg_load
+	if p[P_STANCE] > 0.0:   # sword-side (right) leg leads (positive stance drives the left hip back)
 		if _knee_r: _knee_r.rotation.x += lunge * LUNGE_KNEE_FRONT
 		if _knee_l: _knee_l.rotation.x += lunge * LUNGE_KNEE_REAR
-	elif stance_val < 0.0:
+	elif p[P_STANCE] < 0.0:
 		if _knee_l: _knee_l.rotation.x += lunge * LUNGE_KNEE_FRONT
 		if _knee_r: _knee_r.rotation.x += lunge * LUNGE_KNEE_REAR
-	# Knees bend into the crouch at idle (lead knee deeper); straighten as he moves or strikes.
-	# Added on top of the walk flex set_walk() wrote this frame. WarriorSync drops the hips by
-	# CROUCH_DROP to keep the soles planted, so this reads as a sink, not floating feet.
-	var crouch := leg_idle * (1.0 - w)
+	# Knees bend into the crouch at idle (lead knee deeper); straighten as he moves or loads
+	# into a strike. The grounding pass drops the hips so this reads as a sink, not floating.
+	var crouch := leg_idle * (1.0 - leg_load)
 	if _knee_l: _knee_l.rotation.x += IDLE_KNEE_LEAD * crouch
 	if _knee_r: _knee_r.rotation.x += IDLE_KNEE_REAR * crouch
 	_finalize_feet()
 
 
-# One end of a swing as a flat pose array (field order matches STRIKE_ENDS). `step` -1 (or
-# out of range) is the combat-ready idle guard — the resting pose between combos AND swing
-# 0's windup; its leg stagger/splay relaxes by `leg_idle` so the walk cycle stays clean.
-func _swing_waypoint(step: int, leg_idle: float) -> Array:
-	if step < 0 or step >= STRIKE_ENDS.size():
-		return [IDLE_ARM_PITCH, IDLE_ARM_YAW, 0.0, IDLE_TORSO_TWIST, IDLE_TORSO_LEAN,
-			0.0, IDLE_STANCE * leg_idle, IDLE_WIDEN * leg_idle, 0.0]
-	return STRIKE_ENDS[step]
-
-
-# Weight curve for a strike's pose progress. A slow coil that accelerates to its fastest at
-# ~STRIKE_PEAK, crests just past the landing (the STRIKE_OVERSHOOT follow-through), then
+# Weight curve for a strike's pose progress. A slow release that accelerates to its fastest
+# at ~STRIKE_PEAK, crests just past the landing (the STRIKE_OVERSHOOT follow-through), then
 # decelerates back to exactly 1.0. Returns >1.0 briefly near the crest so the pose lerps
 # extrapolate past the landing and snap back — the difference between a weighty cut and a
-# weightless constant-velocity sweep. (Recovery holds a partial w, so it eases too.)
+# weightless constant-velocity sweep.
 const STRIKE_PEAK := 0.62
 const STRIKE_OVERSHOOT := 0.12
-# Windup (w < 0): pass the coil through linearly — WarriorSync's exponential draw already
-# shapes the motion in time, so the curve only scales how much of it reaches the pose.
-const WINDUP_GAIN := 0.8
 
 func _ease_strike(w: float) -> float:
-	if w < 0.0:
-		return maxf(w, -1.0) * WINDUP_GAIN
 	w = clampf(w, 0.0, 1.0)
 	if w <= STRIKE_PEAK:
 		var u := w / STRIKE_PEAK                        # 0..1, accelerating rise to the crest
@@ -349,40 +373,22 @@ func _ease_strike(w: float) -> float:
 	return lerpf(1.0 + STRIKE_OVERSHOOT, 1.0, s)
 
 
-## Snapshot the EXACT current pose so a combo can settle back to the guard seam-free
-## (Phase C). WarriorSync calls this on the attack->idle edge, then drives set_guard_return.
+## Snapshot the EXACT current pose so a combo can settle back to the guard seam-free.
+## WarriorSync calls this on the attack->idle edge, then drives set_guard_return.
 func begin_guard_return() -> void:
-	if _torso == null:
-		return
-	_relax_from = {
-		"arm_rot": _arm.rotation, "arm_pos": _arm.position,
-		"torso_rot": _torso.rotation, "torso_pos": _torso.position,
-		"leg_l": _leg_l.rotation, "leg_r": _leg_r.rotation,
-		"knee_l": _knee_l.rotation.x, "knee_r": _knee_r.rotation.x,
-	}
+	_relax_from = _cur_pose.duplicate()
 
 
 ## Ease the figure from the captured combo-end pose (r=1) back to the idle guard (r=0), so
-## the warrior visibly returns to guard between combos instead of snapping. Establishes the
-## live guard pose via set_attack(0,0) — which composes over this frame's set_walk — then
-## blends every posed channel back toward the snapshot by r. r=0 lands exactly on the guard,
-## so it hands off seamlessly to the normal idle set_attack(0,0).
+## the warrior visibly returns to guard between combos instead of snapping. r=0 lands
+## exactly on the guard, so it hands off seamlessly to set_guard().
 func set_guard_return(r: float) -> void:
-	if _torso == null or _relax_from.is_empty():
+	if _torso == null:
 		return
-	set_attack(0.0, 0)   # write the live idle-guard pose to every posed node
-	var k := clampf(r, 0.0, 1.0)
-	_arm.rotation = _arm.rotation.lerp(_relax_from["arm_rot"], k)
-	_arm.position = _arm.position.lerp(_relax_from["arm_pos"], k)
-	_torso.rotation = _torso.rotation.lerp(_relax_from["torso_rot"], k)
-	_torso.position = _torso.position.lerp(_relax_from["torso_pos"], k)
-	_leg_l.rotation = _leg_l.rotation.lerp(_relax_from["leg_l"], k)
-	_leg_r.rotation = _leg_r.rotation.lerp(_relax_from["leg_r"], k)
-	_knee_l.rotation.x = lerpf(_knee_l.rotation.x, _relax_from["knee_l"], k)
-	_knee_r.rotation.x = lerpf(_knee_r.rotation.x, _relax_from["knee_r"], k)
-	# Re-derive the ankles + grounding drop from the blended pose (they are pure functions
-	# of the live hip/knee rotations, so the settle stays planted frame by frame).
-	_finalize_feet()
+	if _relax_from.is_empty():
+		set_guard()
+		return
+	_apply_pose(_lerp_pose(_guard_pose(), _relax_from, smoothstep(0.0, 1.0, r)))
 
 # Pose the legs: a signed fore/aft lunge (added on top of the walk pose set_walk() wrote
 # this frame, so it composes without fighting it) plus an explicit lateral splay. The splay
@@ -432,14 +438,32 @@ func _pose_ankle(ankle: Node3D, leg: Node3D, knee: Node3D) -> void:
 func pose_drop() -> float:
 	return _pose_drop
 
-## The blade-tip socket (built in build()) — WarriorSync anchors the slash arc to it.
+## The blade-tip socket (built in build()) — the outer edge of WarriorSync's blade trail.
 func get_sword_tip() -> Node3D:
 	return _sword_tip
 
+## The outer-blade socket — the inner edge of the blade trail.
+func get_sword_mid() -> Node3D:
+	return _sword_mid
 
-## Cape sway: trailing angle in radians (positive flares it back).
+## The chest-socket anchor — WarriorSync pins the Hollow to it.
+func get_chest() -> Node3D:
+	return _chest
+
+
+# How much of the torso's lean the cape cancels. The cape pivot rides the torso, so a
+# forward lean already swings its hem back; stacked with the strike flare, the chop and
+# thrust turned it into a horizontal slab (the thrust read as prone). Cancelling most of
+# the lean lets it hang with gravity; not all of it, or a deep lean folds it into the legs.
+const CAPE_LEAN_CANCEL := 0.7
+
+## Cape sway: trailing angle in radians (positive flares it back), relative to vertical.
+## Call after this frame's pose write (it reads the torso lean).
 func set_cape(angle: float) -> void:
-	if _cape: _cape.rotation.x = angle
+	if _cape == null:
+		return
+	var lean := _torso.rotation.x if _torso else 0.0
+	_cape.rotation.x = angle - lean * CAPE_LEAN_CANCEL
 
 
 ## Coherence-spectrum tatter: `raw` 0 (whole / concept-1) .. 1 (raw / concept-2). Fans

@@ -28,6 +28,7 @@ func _ready() -> void:
 	_test_warrior_damage()
 	_test_locomotion()
 	_test_enemy_pace()
+	_test_strike_poses()
 	print("\n%d passed  %d failed  %d skipped" % [_pass, _fail, _skip])
 
 
@@ -835,3 +836,31 @@ func _frames_until(w: CharacterBody2D, cond: Callable, cap: int = 120) -> int:
 		if cond.call():
 			return i + 1
 	return -1
+
+
+# Strike readability (roadmap 45): the swing keyframes must send the blade THROUGH the aim
+# and land it in front. The old tables parked the forehand's landing ~153 deg off the aim
+# (behind the body) and held it through recovery, so a cut read as aimed somewhere else.
+# Pure data: the blade's ground heading is ~ arm_yaw + torso_twist off body-forward.
+func _test_strike_poses() -> void:
+	print("\n[Strike poses]")
+	var ends: Array = WarriorMesh.STRIKE_ENDS
+	var winds: Array = WarriorMesh.SWING_WINDUPS
+	_ok("one windup + one landing per combo step",
+			ends.size() == WarriorScript.COMBO_LEN and winds.size() == WarriorScript.COMBO_LEN)
+	var heading := func(p: Array) -> float: return p[1] + p[3]
+	var front := true
+	for p in ends:
+		front = front and absf(heading.call(p)) < 1.4
+	_ok("every swing lands in front of the body (|heading| < 80 deg)", front)
+	for step in [0, 1]:
+		var w: float = heading.call(winds[step])
+		var e: float = heading.call(ends[step])
+		_ok("cut %d sweeps across the aim (windup and landing on opposite sides)" % step,
+				signf(w) != signf(e) and absf(w) > 1.0 and absf(e) > 1.0)
+	for step in [2, 3]:
+		_ok("swing %d drives down the aim line (|heading| < 20 deg)" % step,
+				absf(heading.call(ends[step])) < 0.35)
+	var guard := WarriorMesh.IDLE_ARM_YAW + WarriorMesh.IDLE_TORSO_TWIST + WarriorSync.STANCE_YAW
+	_ok("the idle guard holds the blade along the facing (|heading| < 30 deg)", absf(guard) < 0.5)
+
