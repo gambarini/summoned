@@ -8,6 +8,19 @@ enum HitResult { CORRECT, WRONG }
 enum State { IDLE, CHASE, ATTACK, DEAD }
 
 const SPEED := 40.0 * SimSpace.PACE   # chase; authored at PACE 1 (see SimSpace.PACE)
+# Chase steering (roadmap 44). Husks used to snap between 0 and full speed and pivot on a
+# dime; now they ramp: CHASE_ACCEL_TIME from rest to top speed, CHASE_STOP_TIME to settle
+# when they lose the player or reach striking range. Turning is accel-limited too, so a
+# dash past a husk makes it swing round rather than rotate in place.
+const CHASE_ACCEL_TIME := 0.15
+const CHASE_STOP_TIME := 0.12
+# DetectRange radius — script-owned, overriding enemy*.tscn's 64 px (authored for the
+# PLAY_SCALE=1 single-screen box and the old 100 px/s warrior, it left husks inert until
+# he was on top of them). 140 px gives ~0.6s from "it noticed me" to contact at the fast
+# pace (170 px/s warrior + 68 px/s husk closing) — time to read the reaction and choose.
+# Must stay under main.gd's HOME_SAFE_RADIUS - POCKET_RADIUS (170 px) so a fresh summon
+# never wakes a pocket; the test suite pins that.
+const DETECT_RADIUS := 140.0
 # Hit reaction: a CORRECT hit staggers the enemy (no chase/attack) and shoves it away
 # from the player, so the warrior's combo visibly interrupts instead of trading hits.
 const HITSTUN_DURATION := 0.22
@@ -38,6 +51,11 @@ var _knockback := Vector2.ZERO
 
 func _ready() -> void:
 	add_to_group("enemies")
+	# Duplicate before resizing: the scene's shape is a shared sub-resource.
+	var detect: CollisionShape2D = $DetectRange/DetectShape
+	var shape := detect.shape.duplicate() as CircleShape2D
+	shape.radius = DETECT_RADIUS
+	detect.shape = shape
 	frequency = Freq.DISSONANT if randf() < 0.5 else Freq.HARMONIC
 	_visual.color = NEUTRAL_COLOR
 	$DetectRange.body_entered.connect(_on_detect_entered)
@@ -81,13 +99,19 @@ func _physics_process(delta: float) -> void:
 	_tick_status_timers(delta)
 	if _tick_hit_reaction(delta):
 		return
+	var top: float = SPEED * 2.0 if _amplified else SPEED
+	var target := Vector2.ZERO
 	if _state == State.CHASE and _player:
-		var spd := SPEED * 2.0 if _amplified else SPEED
-		var dir := (_player.global_position - global_position).normalized()
-		velocity = dir * spd
+		target = (_player.global_position - global_position).normalized() * top
+	velocity = _steer(target, top, delta)
+	if velocity != Vector2.ZERO:
 		move_and_slide()
-	else:
-		velocity = Vector2.ZERO
+
+# Accel-limited steering toward `target` for a body whose top speed is `top`: the full
+# 0 <-> top range takes CHASE_ACCEL_TIME speeding up, CHASE_STOP_TIME settling to rest.
+func _steer(target: Vector2, top: float, delta: float) -> Vector2:
+	var t: float = CHASE_STOP_TIME if target == Vector2.ZERO else CHASE_ACCEL_TIME
+	return velocity.move_toward(target, top / t * delta)
 
 func _current_color() -> Color:
 	if _amplified:

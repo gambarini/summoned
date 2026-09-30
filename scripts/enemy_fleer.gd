@@ -13,10 +13,11 @@ func _physics_process(delta: float) -> void:
 	_tick_status_timers(delta)
 	if _tick_hit_reaction(delta):
 		return
+	# Same accel-limited steering as the husk chase (enemy.gd _steer), fleeing instead.
+	var spd: float = FLEE_SPEED * 1.5 if _amplified else FLEE_SPEED
 	if _state == State.CHASE and _player:
-		var spd := FLEE_SPEED * 1.5 if _amplified else FLEE_SPEED
 		var dir := (global_position - _player.global_position).normalized()
-		velocity = dir * spd
+		velocity = _steer(dir * spd, spd, delta)
 		move_and_slide()
 		if velocity.length() < 5.0:
 			_cornered_timer += delta
@@ -25,7 +26,9 @@ func _physics_process(delta: float) -> void:
 		else:
 			_cornered_timer = 0.0
 	else:
-		velocity = Vector2.ZERO
+		velocity = _steer(Vector2.ZERO, spd, delta)
+		if velocity != Vector2.ZERO:
+			move_and_slide()
 		_cornered_timer = 0.0
 
 func _do_attack() -> void:

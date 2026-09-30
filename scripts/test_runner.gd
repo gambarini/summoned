@@ -27,6 +27,7 @@ func _ready() -> void:
 	_test_input_map()
 	_test_warrior_damage()
 	_test_locomotion()
+	_test_enemy_pace()
 	print("\n%d passed  %d failed  %d skipped" % [_pass, _fail, _skip])
 
 
@@ -746,6 +747,73 @@ func _test_locomotion() -> void:
 	_ok("a buffered attack cancels the dash", w._state == WarriorScript.State.ATTACK_STARTUP)
 	_ok("dash-attack keeps its lunge momentum", w.velocity.length() > speed)
 	w.queue_free()
+
+
+# ── Husks keep pace ─────────────────────────────────────────────────────────────
+
+# Roadmap 44. Husk/fleer velocity used to snap between 0 and full speed; it now ramps
+# (enemy.gd _steer). Same hand-stepped 60 Hz method as the locomotion specs. The detect
+# radius is script-owned and must never reach a pocket from the summon point.
+func _test_enemy_pace() -> void:
+	print("\n[Enemy pace]")
+	var main_consts: Dictionary = load("res://scripts/main.gd").get_script_constant_map()
+	var nearest_spawn: float = main_consts["HOME_SAFE_RADIUS"] - main_consts["POCKET_RADIUS"]
+	_ok("a fresh summon can't wake a pocket (detect %.0f < %.0f)" % [EnemyScript.DETECT_RADIUS, nearest_spawn],
+			EnemyScript.DETECT_RADIUS < nearest_spawn)
+
+	for scene in [EnemyScene, EnemyFleerScene, EnemyPhaserScene]:
+		var inst := (scene as PackedScene).instantiate() as CharacterBody2D
+		add_child(inst)
+		var r: float = (inst.get_node("DetectRange/DetectShape").shape as CircleShape2D).radius
+		_ok("%s detects at DETECT_RADIUS" % inst.name, is_equal_approx(r, EnemyScript.DETECT_RADIUS))
+		inst.queue_free()
+
+	# A stand-in player 200 px to the right; the chase state is forced, not detected. Both
+	# sit far from the origin, where every earlier spec's bodies still overlap (queue_free
+	# is pending until the synchronous suite ends) and would clip move_and_slide.
+	var clear := Vector2(-5000.0, -5000.0)
+	var target := CharacterBody2D.new()
+	add_child(target)
+	target.position = clear + Vector2(200.0, 0.0)
+
+	var husk := _enemy(EnemyScript.Freq.HARMONIC)
+	husk.position = clear
+	husk._player = target
+	husk._state = EnemyScript.State.CHASE
+	husk._physics_process(_DT)
+	_ok("husk ramps into the chase (no snap to full speed)",
+			husk.velocity.x > 0.0 and husk.velocity.x < 0.5 * EnemyScript.SPEED)
+	var f := _steps_until(husk, func() -> bool: return husk.velocity.x >= EnemyScript.SPEED - 0.01)
+	_ok("husk reaches chase speed within ~0.15s (%d frames, v=%.1f)" % [f, husk.velocity.x], f > 0 and f <= 10)
+	husk._state = EnemyScript.State.IDLE
+	husk._physics_process(_DT)
+	_ok("husk settles rather than stopping dead", husk.velocity.x > 0.0)
+	f = _steps_until(husk, func() -> bool: return husk.velocity == Vector2.ZERO)
+	_ok("husk is at rest within ~0.12s (%d frames)" % f, f > 0 and f <= 8)
+	husk.queue_free()
+
+	var fleer := EnemyFleerScene.instantiate() as CharacterBody2D
+	add_child(fleer)
+	fleer.position = clear + Vector2(0.0, 400.0)
+	target.position = fleer.position + Vector2(200.0, 0.0)
+	fleer._player = target
+	fleer._state = EnemyScript.State.CHASE
+	fleer._physics_process(_DT)
+	_ok("fleer ramps away from the player",
+			fleer.velocity.x < 0.0 and fleer.velocity.x > -0.5 * EnemyFleerScript.FLEE_SPEED)
+	f = _steps_until(fleer, func() -> bool: return fleer.velocity.x <= -EnemyFleerScript.FLEE_SPEED + 0.01)
+	_ok("fleer reaches flee speed within ~0.15s (%d frames)" % f, f > 0 and f <= 10)
+	fleer.queue_free()
+	target.queue_free()
+
+
+# Step any body's _physics_process at 60 Hz until `cond` holds; frame count or -1.
+func _steps_until(body: Node, cond: Callable, cap: int = 60) -> int:
+	for i in cap:
+		body._physics_process(_DT)
+		if cond.call():
+			return i + 1
+	return -1
 
 
 # A warrior out of the summon grace, steered by `dir[0]` and aiming right.
